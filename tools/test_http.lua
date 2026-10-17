@@ -359,7 +359,7 @@ do
     SlashCmdList.RAIDRESBRIDGE("DEMO42")
     check("falls back to the watcher", FILES["RaidResBridge_request.txt"], "DEMO42")
     check("says it is waiting for it", heard("waiting for the watcher"), true)
-    SlashCmdList.RAIDRESBRIDGE("")
+    SlashCmdList.RAIDRESBRIDGE("help")
     check("help mentions the DLL", heard("RaidResHttp.dll"), true)
 end
 

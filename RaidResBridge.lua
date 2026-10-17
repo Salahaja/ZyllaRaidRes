@@ -228,11 +228,18 @@ SlashCmdList["RAIDRESBRIDGE"] = function(msg)
     local _, _, cmd = string.find(msg, "^%s*(%S*)")
     cmd = string.lower(cmd or "")
 
-    if cmd == "" then
+    --[[ The window is the front door: /rrb on its own opens it, and the
+         chat-only forms are for macros and for anyone who prefers typing. ]]
+    if cmd == "" or cmd == "gui" or cmd == "show" or cmd == "list" then
+        RB.ToggleGui()
+        return
+    end
+
+    if cmd == "help" or cmd == "?" then
+        say("|cffffffff/rrb|r opens the window: fetch a list, see who still " ..
+            "needs reserves, and add them by hand.")
         say("|cffffffff/rrb <raidres link>|r fetches a list and imports it.")
-        say("|cffffffff/rrb gui|r opens the list, and adds reserves by hand " ..
-            "for anyone who could not sign up.")
-        say("|cffffffff/rrb load|r imports what was fetched, plus those.")
+        say("|cffffffff/rrb load|r imports what was fetched, plus anything typed.")
         if RB.Http and RB.Http() then
             say("|cff888888Fetching in game (RaidResHttp.dll is loaded).|r")
         else
@@ -249,12 +256,6 @@ SlashCmdList["RAIDRESBRIDGE"] = function(msg)
         --[[ Through the merge, so a reload does not quietly drop the lines
              somebody typed in for the people who could not sign up. ]]
         if RB.Apply then RB.Apply() else RB.Load() end
-        return
-    end
-
-    if cmd == "gui" or cmd == "show" or cmd == "list" then
-        RB.LoadRaids()
-        RB.ToggleGui()
         return
     end
 

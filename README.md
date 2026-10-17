@@ -14,8 +14,8 @@ RaidRes: imported 12 player(s), 24 reservation(s), 1 hard-reserved (XXXXXX).
 ```
 
 No website, no export button, no copying a base64 blob into RollFor's import
-window. There's also a window (`/rrb gui`) for adding reserves by hand for
-anyone who couldn't sign up.
+window. Type `/rrb` for a window that shows who still needs reserves and
+adds them by hand for anyone who couldn't sign up.
 
 ## Install
 
@@ -28,7 +28,7 @@ anyone who couldn't sign up.
    and add a line `RaidResHttp.dll` to `dlls.txt`. VanillaFixes asks once
    whether to load it.
 
-Type `/rrb` with nothing after it to see which way it's fetching.
+Type `/rrb help` to see which way it's fetching.
 
 Without the DLL it still works, but needs a small script running outside the
 game (see [the watcher](#without-the-dll-the-watcher)).
@@ -64,6 +64,25 @@ field. Fetching a list also caches that raid's loot table for the window, and
 
 The DLL's source, build script and notes are in [`dll/`](dll). It's built
 with Visual Studio 2022 Build Tools, 32-bit, with a static runtime.
+
+## Links in raid chat
+
+When someone posts a raidres link in **raid chat**, it shows as a clickable
+**[Raidres XXXXXX]**. Click it and the window opens with that list, already
+fetching.
+
+- **Raid chat only.** Raid, raid leader and raid warning messages. Guild,
+  world, whispers and every other channel are left as they are. The click
+  holds to the same rule: only a link the addon saw in raid chat this session
+  does anything.
+- **Switching asks first.** If it would replace a different active list, it
+  asks, naming who posted it. Clicking the active list again just refreshes
+  it. Reserves you typed in the window stay either way.
+- **Shift-click** puts the URL in your chat box.
+- **It works alongside ShaguTweaks and pfUI.** They turn URLs into
+  copy-the-link links as the text is drawn. This runs one step earlier, so a
+  raidres link in raid chat is already a raidres link by the time they see
+  it, and every other URL is still theirs.
 
 ## Without the DLL: the watcher
 
@@ -141,84 +160,152 @@ says so rather than failing quietly. A soft-reserve list that silently does not
 load is worse than one that never loaded, because the raid finds out when the
 loot drops.
 
-## The window — `/rrb gui`
+## The window: `/rrb`
 
-Pick a player, pick an instance, click the loot. RollFor can import a list but
-has no way to see one, and its only soft-res window is a box you paste base64
-into.
+Made for the raid leader ten minutes before the pull, with a roster in front of
+them and people whispering what they want. It's built from the client's own
+parts so it looks like it shipped with the game:
+- the Options window's dialog border, header banner and labelled boxes
+- the Who list's column headers
+- the quest log's highlight and +/- boss headers
+- a standard dropdown
+- the client's own class and item colours
+
+With pfUI loaded, it's skinned the way pfUI skins every Blizzard window.
 
 ```
-Soft Reserves              24 reservation(s), limit 2 each,  2 by hand
- Ayla      0/2  <        Zul'Gurub  (click the name on the left to change)
- Morn      0/2            Jeklik
- Zed       1/2              Primal Hakkari Shawl
- Grimtusk  2/2              Jin'do's Evil Eye      Aldwyn
- ...                      Venoxis
- [Send to RollFor] [Re-fetch] [Get loot] [Clear typed]
+                      .-----------------------.
++---------------------|     Zylla RaidRes     |---------------------- [x] +
+|                     '-----------------------'                           |
+|  Raidres link [ https://raidres.top/res/XXXXXX ] [Fetch]  XXXXXX  ZG, 12  |
+|                                                                           |
+|  Players  12 of 15 done   [ ] Missing only   Loot                         |
+|  +--------------------------------------+   +----------------------------------+ |
+|  | Name                  | Reserves     |   | [Zul'Gurub     v] [Search  ] [x] Usable | |
+|  | Newbie                     0/2       |   | - Hakkar                         | |
+|  | Zed                        0/2       |   |   [] Heart of Hakkar  v Newbie   | |
+|  | Aldwyn  not here           2/2       |   |   [] Zin'rokh       Hard reserve | |
+|  | ...                                  |   | + Jin'do the Hexxer              | |
+|  +--------------------------------------+   | ...                              | |
+|  Newbie's reserves  1 of 2                  |                                  | |
+|  +--------------------------------------+   |                                  | |
+|  |  [] Bloodsoaked Legplates        [X] |   |                                  | |
+|  +--------------------------------------+   +----------------------------------+ |
+|  Click loot to reserve it for Newbie (1 left).  [Clear typed] [Send to RollFor] |
++---------------------------------------------------------------------------+
 ```
 
-**The players come from the raid**, each showing their count against the
-event's limit, with **whoever has reserved nothing at the top** — they are
-the reason the window is open. People already on the list who have not zoned in
-yet are listed after them. Anyone at the limit is dimmed and sinks to the
-bottom.
+1. **Paste the link** at the top and press Fetch or Enter. The box keeps the
+   last list's link, so fetching again to refresh it is one click.
+2. **The players are your raid**, each counted against the event's own limit:
+   red with nothing, yellow part way, green when done. Whoever still has
+   reserves to make is at the top. People on the list who aren't in your group
+   yet follow, marked *not here*. Tick **Missing only** to see only those
+   still to reserve. Click **Name** or **Reserves** to sort by that column.
+3. **Pick one.** Its row stays lit, and their reserves show under the list. Ones typed here have an
+   X to take them back, and ones from raidres are marked `raidres` and locked.
+   Click the player again to let go.
+4. **Click loot** to reserve it for them, and click again to take it back.
+   Rows they hold get a check mark. When they're full, the rest of the loot
+   dims.
+5. **Every change goes to RollFor as you make it.** *Send to RollFor* only
+   sends everything again, e.g. after RollFor was reloaded.
 
-**The loot comes from raidres's own table for the instance**, grouped by boss,
-coloured by quality, with the name of anyone who already has it beside it.
-Hover for the tooltip. Clicking gives it to the selected player; clicking again
-takes it back.
+The line at the bottom always says what your next click will do, and answers
+when a click is refused.
 
-The instance is chosen from the same left-hand pane — click the header and
-it becomes a list of raids, click one and it goes back to players. One set of
-rows doing two jobs, rather than a dropdown.
+**The loot** is raidres's own table for the instance, grouped by boss and
+coloured by quality, with item icons once the game has seen an item. Who holds
+each item is shown beside it.
+- **It picks the raid for you,** and the newest signal wins:
+  1. **The raid your group is in.** Yours if you're inside one, otherwise
+     wherever most of your raid already is. One member inside is enough, so
+     the loot is ready while you're still in town. It reads the zone from the
+     raid roster, the same one a member's tooltip shows, and checks again
+     every few seconds while the window is open. Offline members don't count.
+     On a tie, the list's own raid wins if it's one of them.
+  2. **A newly fetched list** switches to the list's raid.
+  3. **Choosing from the dropdown** stands until one of those changes. Everyone
+     leaving a raid doesn't change it.
 
-**Press "Get loot" once** to cache the loot tables (23 raids, ~150KB). They
-change when the server patches, not when somebody reserves something, so they
-are fetched on their own rather than with every list.
+  The *Loot* label says which it went by: *you're here*, *3 of your raid are
+  here*, or *the list's raid*.
+  Raid zones are named after their raids, apart from AQ40 (zone *Ahn'Qiraj*)
+  and UBRS (zone *Blackrock Spire*), which it knows. World bosses are left to
+  the dropdown, because standing in Azshara says nothing about Azuregos.
+- **Boss headers fold** like zones in the quest log. A search opens them all,
+  so nothing it finds stays hidden.
+- **Search** matches item or boss names, so `hakkar` shows Hakkar's loot.
+- **Usable** (on by default) hides items the selected player's class can't
+  use, such as other classes' tier pieces. Loot meant for everyone always
+  shows.
+- **Clicks work as elsewhere in the game:** shift-click links the item in chat
+  (or a WIM whisper), and ctrl-click tries it on. Hover for the tooltip, which
+  also says what a click will do.
 
-### What it will not let you do
+**Loot tables** download once from the bottom of the dropdown, or from the button in
+an empty loot pane (23 raids, ~150KB). They change when the server patches,
+not when somebody reserves something. Fetching a list also brings that raid's
+table along.
 
-Remove a reservation somebody made on the website. It is shown as theirs, and
-deleting it here would look like it worked and come straight back on the next
-fetch. Only typed lines carry a way to remove them.
+### What it won't let you do
 
-Go over the event's limit. That limit comes from the event itself, not an
-assumption — a list that allows one would otherwise quietly take a second.
+- **Remove a reservation someone made on raidres.** It's shown as theirs, and
+  deleting it here would look like it worked and come straight back on the
+  next fetch. Change it on raidres.
+- **Soft-reserve a hard-reserved item.**
+- **Go over the event's limit.** The limit comes from the event itself, not an
+  assumption, so a list that allows one won't quietly take a second.
+- **Clear what you typed without asking first.** *Clear typed* says how many
+  it will remove and needs a yes. Reserves from raidres stay.
 
-Typed entries live in SavedVariables, separate from the fetched list, merged on
-the way to RollFor. Separate because **a refetch must not discard what you
-typed**. A player on both sides keeps one entry holding both sets of items; an
-item on both sides is not doubled.
+Typed entries live in SavedVariables, separate from the fetched list, and are
+merged on the way to RollFor. They're kept separate because **a refetch must
+not discard what you typed**. A player on both sides keeps one entry holding
+both sets of items, and an item on both sides isn't doubled.
 
-A list with nothing fetched at all is fine — a raid organised entirely in
-chat is an ordinary case.
+A list with nothing fetched at all is fine. A raid organised entirely in chat
+is an ordinary case.
 
 ## Commands
 
 | | |
 |---|---|
+| `/rrb` | open or close the window |
 | `/rrb <link>` | fetch that list and import it |
-| `/rrb gui` | pick a player, pick an instance, click the loot |
 | `/rrb load` | import what was fetched, plus anything typed |
-| `/rrb` | what it does, and the last list imported |
+| `/rrb help` | the commands, and how it's fetching |
 
-Also `/raidres`.
+Also `/raidres`. `/rrb gui` still works.
 
 ## Tests
 
+Run with Lua 5.x from anywhere. Each prints its checks and exits non-zero on a
+failure.
+
 ```bash
-lua tools/test_bridge.lua
-lua tools/test_http.lua
+lua tools/test_bridge.lua   # reading lists, the merge, typed reserves  (86)
+lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (76)
+lua tools/test_gui.lua      # the window and raid-chat links, clicked   (214)
+lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Manual.lua Gui.lua Chat.lua
 ```
 
-`test_http.lua` drives the in-game fetch against replies saved from the site
-(`tools/fixtures`, with the players' names and ids replaced) and a stand-in for the DLL. It checks the result against
-what the watcher makes of the same replies, which `tools/make_fixtures.py`
-writes to `fixtures/expected.lua`.
-
-Driven against the file the real fetcher produced rather than a fixture,
-because the thing most likely to break is the shape of that file rather than
-the logic around it. 86 checks, mutation-checked twelve ways.
+- **The fixtures** in `tools/fixtures` are real raidres replies with the
+  players' names, Discord ids and the event token replaced.
+  `tools/make_fixtures.py` rebuilds them and writes `expected.lua`, which is
+  what the watcher makes of the same replies. `test_http.lua` holds the
+  in-game conversion to that, field for field.
+- **`test_gui.lua`** builds the real window on a small stand-in for the 1.12
+  widget API, then clicks through it the way a raid leader would. It checks
+  what's on screen after each step: row texts, the hint line, enabled
+  buttons, tooltips. It has no layout engine, so it can't catch a misplaced
+  frame.
+- **The suites are mutation-checked.** Each behaviour they claim to cover was
+  broken on purpose, one at a time, to confirm a test fails.
+- **`vanilla_lint.lua`** catches what Lua 5.4 accepts and the 1.12 client
+  doesn't, including closures over a `for` loop's variables. Those read `nil`
+  in game, because Lua 5.0 shares those variables with every closure made in
+  the loop.
 
 ## Requires
 

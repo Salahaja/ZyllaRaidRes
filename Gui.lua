@@ -1,35 +1,95 @@
---[[ The window: pick a player, pick an instance, click the loot.
+--[[ The window. /rrb opens it.
 
-     Typing a name and shift-clicking an item worked, but it is the wrong shape
-     for the job. On the night the raid leader is looking at a roster and a
-     list of people who have not reserved, not at an empty text box -- so the
-     players come from the raid itself, each showing how many reserves they
-     have against the limit, and the loot comes from raidres's own table for
-     the instance, grouped by boss.
+     Built for the raid leader on the night, ten minutes before the pull, with
+     a roster in front of them and people whispering what they want:
 
-     Plain 1.12 frames rather than RollFor's widgets, so this survives RollFor
-     reorganising its own.
+       1. Paste the raidres link at the top and press Fetch (or Enter).
+       2. The players are the raid, whoever still has reserves to make at the
+          top, each counted against the event's own limit.
+       3. Pick one, and the loot is theirs to click: click to reserve, click
+          again to take it back. Their reserves show under the list, with an X
+          on the ones typed here.
+       4. Every change goes to RollFor as it is made.
 
-     The left pane does double duty: players normally, and the instance list
-     when you are choosing one. Two uses of one set of row widgets rather than
-     a dropdown, because UIDropDownMenu in 1.12 is fiddly enough that an
-     untested one is a liability, and a list that is already there is not. ]]
+     The rules it keeps:
+       - One selection drives everything, and the line at the bottom always
+         says what the next click will do.
+       - Nothing here can remove what someone reserved on raidres. Those are
+         marked and locked, because a refetch would bring them straight back
+         and the window would have lied.
+       - The loot shows the raid you are standing in, or the one the list is
+         for -- never just whichever raid sorts first.
+
+     It is meant to look like it shipped with the client, so it is made of the
+     client's own parts: the dialog border and header banner of the Options
+     window, its grey labelled boxes, the Who list's column headers, the quest
+     log's highlight and its +/- headers, a real UIDropDownMenu, and the
+     client's own class and item colours. With pfUI loaded it is skinned the
+     way pfUI skins every Blizzard window.
+
+     Every handler reads `this`, never a loop variable: Lua 5.0 shares a for
+     loop's variables with the closures made inside it. Rows are sized
+     outright rather than by their anchors, because this client reports stale
+     sizes for anchor-sized frames. ]]
 
 local RB = RaidResBridge
 
-local ROWS = 14
-local ROW_H = 16
-local LEFT_W = 150
-local RIGHT_W = 290
+-- ---------------------------------------------------------------------------
+-- Layout
+-- ---------------------------------------------------------------------------
+
+local W, H = 680, 500
+local ROW_H = 18
+local EDGE = 20                 -- inside the dialog border
+local BOX_TOP = 78              -- the boxes start here; their labels sit above
+local GAP = 18
+local P_W = 236                 -- players column
+local P_ROWS = 12
+local P_LIST_TOP = 32           -- under the column headers
+local P_H = P_LIST_TOP + P_ROWS * ROW_H + 8
+local D_ROWS = 4                -- the selected player's reserves
+local D_H = D_ROWS * ROW_H + 14
+local D_TOP = BOX_TOP + P_H + 22
+local L_X = EDGE + P_W + GAP
+local L_W = W - L_X - EDGE
+local L_H = D_TOP + D_H - BOX_TOP
+local L_LIST_TOP = 38           -- under the dropdown
+local L_ROWS = 17
+local SCROLLBAR = 22
+
+local DIALOG = {
+    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    tile = true, tileSize = 32, edgeSize = 32,
+    insets = { left = 11, right = 12, top = 12, bottom = 11 },
+}
+
+-- The Options window's boxes: a thin grey border, a little darker inside.
+local BOX = {
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = true, tileSize = 16, edgeSize = 16,
+    insets = { left = 5, right = 5, top = 5, bottom = 5 },
+}
+
+local HIGHLIGHT = "Interface\\QuestFrame\\UI-QuestTitleHighlight"
+local QMARK = "Interface\\Icons\\INV_Misc_QuestionMark"
+local PLUS = "Interface\\Buttons\\UI-PlusButton-Up"
+local MINUS = "Interface\\Buttons\\UI-MinusButton-Up"
+local CHECK = "Interface\\Buttons\\UI-CheckBox-Check"
+
+-- The client's own text colours (NORMAL_FONT_COLOR and friends).
+local GOLD, WHITE, GREY = "ffd200", "ffffff", "808080"
+local RED, GREEN = "ff2020", "20ff20"
 
 local QUALITY = {
     [0] = "9d9d9d", [1] = "ffffff", [2] = "1eff00",
     [3] = "0070dd", [4] = "a335ee", [5] = "ff8000",
 }
 
-local CLASS_COLOUR = {
+local CLASS_FALLBACK = {
     WARRIOR = "c79c6e", PALADIN = "f58cba", HUNTER = "abd473", ROGUE = "fff569",
-    PRIEST = "ffffff", SHAMAN = "0070de", MAGE = "69ccf0", WARLOCK = "9482c9",
+    PRIEST = "ffffff", SHAMAN = "f58cba", MAGE = "69ccf0", WARLOCK = "9482c9",
     DRUID = "ff7d0a",
 }
 
@@ -37,75 +97,108 @@ local function say(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff8fd3ffRaidRes|r: " .. msg)
 end
 
-local function itemIdFrom(link)
-    if not link then return nil end
-    local _, _, id = string.find(link, "item:(%d+)")
-    return tonumber(id)
+local function hex(colour, s) return "|cff" .. colour .. s .. "|r" end
+
+local function rgb(h)
+    return tonumber(string.sub(h, 1, 2), 16) / 255,
+           tonumber(string.sub(h, 3, 4), 16) / 255,
+           tonumber(string.sub(h, 5, 6), 16) / 255
+end
+
+local function toHex(r, g, b)
+    return string.format("%02x%02x%02x", math.floor(r * 255 + 0.5),
+        math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5))
+end
+
+-- Item and class colours from the client when it has them, so they match the
+-- bags, the raid frame and the chat exactly.
+local function qualityHex(q)
+    if GetItemQualityColor and q then
+        local r, g, b = GetItemQualityColor(q)
+        if r then return toHex(r, g, b) end
+    end
+    return QUALITY[q or 1] or WHITE
+end
+
+local function classHex(class)
+    local c = class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+    if c then return toHex(c.r, c.g, c.b) end
+    return CLASS_FALLBACK[class or ""] or WHITE
+end
+
+-- The same name key Manual.lua uses: case and spaces do not make two people.
+local function key(name)
+    return string.lower(string.gsub(name or "", "%s", ""))
+end
+
+local function rollForReady()
+    return RollFor and RollFor.key_bindings
+        and type(RollFor.key_bindings.import) == "function"
 end
 
 -- ---------------------------------------------------------------------------
--- What the panes show
+-- What the window shows
 -- ---------------------------------------------------------------------------
+
+--- How many reserves each player is allowed. The event says; two is the usual.
+function RB.Limit()
+    return RaidResBridge_Limit or 2
+end
 
 --[[ Who can be given a reserve.
 
-     The raid first, because that is who is actually there, and anyone already
-     on the list after it -- a signup who has not zoned in yet still has
-     reserves worth seeing. Sorted with the people who have reserved nothing at
-     the top, since they are the reason this window is open. ]]
-function RB.Players()
-    local counts, classes = {}, {}
-    local data = RB.Merged()
+     The raid first, because that is who is actually there, then anyone on the
+     list who is not -- a signup who has not zoned in yet still has reserves
+     worth seeing. By default whoever has reserved nothing comes first, since
+     they are the reason the window is open, and anyone at the limit sinks.
+     The Name column header sorts by name instead. ]]
+function RB.Players(snap)
+    local data = snap and snap.merged or RB.Merged()
+    local counts = {}
     for _, p in ipairs(data.softreserves or {}) do
-        counts[string.lower(p.name)] = table.getn(p.items or {})
+        counts[key(p.name)] = table.getn(p.items or {})
     end
 
     local out, seen = {}, {}
-    local function add(name, class)
-        if not name or name == "" then return end
-        local k = string.lower(name)
+    local function add(name, class, inRaid)
+        if not name or name == "" or name == UNKNOWNOBJECT then return end
+        local k = key(name)
         if seen[k] then return end
         seen[k] = true
         table.insert(out, { name = name, class = class,
-                            count = counts[k] or 0, inRaid = class ~= nil })
+                            count = counts[k] or 0, inRaid = inRaid })
     end
 
     local raid = GetNumRaidMembers and GetNumRaidMembers() or 0
     if raid > 0 then
         for i = 1, raid do
             local name, _, _, _, _, class = GetRaidRosterInfo(i)
-            add(name, class and string.upper(class))
+            add(name, class and string.upper(class), true)
         end
     else
-        add(UnitName("player"), select and nil or nil)
         local _, cls = UnitClass("player")
-        if out[1] then out[1].class = cls end
+        add(UnitName("player"), cls, true)
         local party = GetNumPartyMembers and GetNumPartyMembers() or 0
         for i = 1, party do
-            local unit = "party" .. i
-            local _, c = UnitClass(unit)
-            add(UnitName(unit), c)
+            local _, c = UnitClass("party" .. i)
+            add(UnitName("party" .. i), c, true)
         end
     end
+    for _, p in ipairs(data.softreserves or {}) do add(p.name, nil, false) end
 
-    for _, p in ipairs(data.softreserves or {}) do add(p.name, nil) end
-
-    --[[ Nobody-yet first, then by name. The ones at the limit sink, because
-         there is nothing left to do with them. ]]
     local limit = RB.Limit()
-    table.sort(out, function(a, b)
-        local af = (a.count >= limit) and 1 or 0
-        local bf = (b.count >= limit) and 1 or 0
-        if af ~= bf then return af < bf end
-        if a.count ~= b.count then return a.count < b.count end
-        return a.name < b.name
-    end)
+    if RB.playerSort == "name" then
+        table.sort(out, function(a, b) return a.name < b.name end)
+    else
+        table.sort(out, function(a, b)
+            local af = (a.count >= limit) and 1 or 0
+            local bf = (b.count >= limit) and 1 or 0
+            if af ~= bf then return af < bf end
+            if a.count ~= b.count then return a.count < b.count end
+            return a.name < b.name
+        end)
+    end
     return out
-end
-
---- How many reserves each player is allowed. The event says; two is the usual.
-function RB.Limit()
-    return RaidResBridge_Limit or 2
 end
 
 --- Every raid whose loot table has been cached, by name.
@@ -119,26 +212,60 @@ function RB.RaidList()
     return out
 end
 
---[[ One instance's loot, boss by boss.
+--[[ Does an item pass the loot filters?
+
+     The search matches the item or its boss, so "hakkar" finds Hakkar's loot.
+     The class filter only ever hides items the loot table restricts to other
+     classes; anything with no class list is for everyone and always shows. ]]
+function RB.ItemMatches(it, search, class)
+    if search and search ~= "" then
+        if not string.find(string.lower(it.n or ""), search, 1, true)
+           and not string.find(string.lower(it.b or ""), search, 1, true) then
+            return false
+        end
+    end
+    if class and it.c and table.getn(it.c) > 0 then
+        for _, c in ipairs(it.c) do
+            if string.upper(c) == class then return true end
+        end
+        return false
+    end
+    return true
+end
+
+--[[ One instance's loot, boss by boss, filtered.
 
      Flattened into rows with headers rather than nested, so the scroll offset
-     stays a plain index into a list. ]]
-function RB.ItemRows(raidId)
+     stays a plain index into a list. A boss can be folded away like a zone in
+     the quest log; a search opens every boss, so nothing found is hidden. A
+     boss whose loot is all filtered out loses its header too. ]]
+function RB.ItemRows(raidId, opts)
     local raid = (RaidResBridge_Raids or {})[raidId]
     if not raid then return {} end
+    local search = opts and opts.search
+    local class = opts and opts.class
+    local folded = (opts and opts.collapsed) or {}
+    local searching = search and search ~= ""
     local groups, order = {}, {}
     for _, it in ipairs(raid.items or {}) do
-        local boss = it.b or ""
-        if not groups[boss] then
-            groups[boss] = {}
-            table.insert(order, boss)
+        if RB.ItemMatches(it, search, class) then
+            local boss = it.b or ""
+            if not groups[boss] then
+                groups[boss] = {}
+                table.insert(order, boss)
+            end
+            table.insert(groups[boss], it)
         end
-        table.insert(groups[boss], it)
     end
     local rows = {}
     for _, boss in ipairs(order) do
-        table.insert(rows, { header = boss ~= "" and boss or "Elsewhere" })
-        for _, it in ipairs(groups[boss]) do table.insert(rows, { item = it }) end
+        local fold = tostring(raidId) .. ":" .. boss
+        local closed = folded[fold] and not searching
+        table.insert(rows, { header = boss ~= "" and boss or "Elsewhere",
+                             fold = fold, collapsed = closed and true or false })
+        if not closed then
+            for _, it in ipairs(groups[boss]) do table.insert(rows, { item = it }) end
+        end
     end
     return rows
 end
@@ -154,333 +281,1260 @@ function RB.WhoHas(gameItemId)
     return out
 end
 
--- ---------------------------------------------------------------------------
--- The window
--- ---------------------------------------------------------------------------
+--[[ Everything one draw needs, worked out once.
 
-function RB.BuildGui()
-    if RB.gui then return RB.gui end
+     RB.Read parses the list file, and the first window called it once per
+     visible row. This reads it twice per change and indexes the rest:
+     who holds what, which of a player's reserves came from raidres (locked)
+     and which were typed here (removable), and what is hard-reserved. ]]
+function RB.Snapshot()
+    local fetched, _, ref = RB.Read()
+    local merged = RB.Merged()
+    local s = { merged = merged, ref = ref, holders = {}, items = {},
+                web = {}, typed = {}, hard = {}, typedCount = 0 }
 
-    local f = CreateFrame("Frame", "RaidResBridgeFrame", UIParent)
-    f:SetWidth(LEFT_W + RIGHT_W + 50)
-    f:SetHeight(ROWS * ROW_H + 110)
-    f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-    f:SetBackdrop({
-        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 32,
-        insets = { left = 11, right = 12, top = 12, bottom = 11 },
-    })
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", function() this:StartMoving() end)
-    f:SetScript("OnDragStop", function() this:StopMovingOrSizing() end)
-    f:Hide()
-    table.insert(UISpecialFrames, "RaidResBridgeFrame")
-
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("TOP", f, "TOP", 0, -14)
-    title:SetText("Soft Reserves")
-
-    f.sub = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    f.sub:SetPoint("TOP", title, "BOTTOM", 0, -2)
-
-    local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -8, -8)
-
-    -- left: players, or the instance list while choosing one
-    f.leftHead = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    f.leftHead:SetWidth(LEFT_W)
-    f.leftHead:SetHeight(18)
-    f.leftHead:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -48)
-    f.leftHead:SetScript("OnClick", function()
-        --[[ The same button both enters and leaves the instance list, so the
-             way back is where the way in was. ]]
-        RB.pickingRaid = not RB.pickingRaid
-        RB.Refresh()
-    end)
-
-    f.left = {}
-    for i = 1, ROWS do
-        local row = CreateFrame("Button", nil, f)
-        row:SetWidth(LEFT_W)
-        row:SetHeight(ROW_H)
-        row:SetPoint("TOPLEFT", f.leftHead, "BOTTOMLEFT", 0, -2 - (i - 1) * ROW_H)
-        local text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        text:SetPoint("LEFT", row, "LEFT", 4, 0)
-        text:SetWidth(LEFT_W - 8)
-        text:SetJustifyH("LEFT")
-        row.text = text
-        row:SetScript("OnClick", function()
-            local d = this.data
-            if not d then return end
-            if d.raidId then
-                RB.raid = d.raidId
-                RB.pickingRaid = false
-            else
-                RB.player = d.name
-            end
-            RB.Refresh()
-        end)
-        f.left[i] = row
-    end
-
-    -- right: the chosen instance's loot
-    f.rightHead = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.rightHead:SetPoint("TOPLEFT", f.leftHead, "TOPRIGHT", 14, -4)
-
-    f.right = {}
-    for i = 1, ROWS do
-        local row = CreateFrame("Button", nil, f)
-        row:SetWidth(RIGHT_W)
-        row:SetHeight(ROW_H)
-        row:SetPoint("TOPLEFT", f.leftHead, "BOTTOMLEFT", LEFT_W + 14, -2 - (i - 1) * ROW_H)
-        local text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        text:SetPoint("LEFT", row, "LEFT", 4, 0)
-        text:SetWidth(RIGHT_W - 10)
-        text:SetJustifyH("LEFT")
-        row.text = text
-
-        row:SetScript("OnClick", function() RB.ClickItem(this.data) end)
-        row:SetScript("OnEnter", function()
-            local d = this.data
-            if d and d.item and d.item.g then
-                GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-                GameTooltip:SetHyperlink("item:" .. d.item.g .. ":0:0:0")
-                local who = RB.WhoHas(d.item.g)
-                if table.getn(who) > 0 then
-                    GameTooltip:AddLine("Reserved by " .. table.concat(who, ", "),
-                        0.56, 0.83, 1)
-                end
-                GameTooltip:Show()
-            end
-        end)
-        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
-        f.right[i] = row
-    end
-
-    local scroll = CreateFrame("ScrollFrame", "RaidResBridgeScroll", f,
-        "FauxScrollFrameTemplate")
-    scroll:SetWidth(RIGHT_W)
-    scroll:SetHeight(ROWS * ROW_H)
-    scroll:SetPoint("TOPLEFT", f.leftHead, "BOTTOMLEFT", LEFT_W + 14, -2)
-    scroll:SetScript("OnVerticalScroll", function()
-        FauxScrollFrame_OnVerticalScroll(ROW_H, RB.Refresh)
-    end)
-    f.scroll = scroll
-
-    -- bottom
-    local apply = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    apply:SetWidth(110)
-    apply:SetHeight(20)
-    apply:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 16)
-    apply:SetText("Send to RollFor")
-    apply:SetScript("OnClick", function() RB.Apply() end)
-
-    local refetch = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    refetch:SetWidth(80)
-    refetch:SetHeight(20)
-    refetch:SetPoint("LEFT", apply, "RIGHT", 6, 0)
-    refetch:SetText("Re-fetch")
-    refetch:SetScript("OnClick", function()
-        local _, _, got = RB.Read()
-        local ref = RB.loaded or got
-        if ref then RB.Request(ref)
-        else say("nothing to re-fetch. |cffffffff/rrb <link>|r first.") end
-    end)
-
-    local loot = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    loot:SetWidth(80)
-    loot:SetHeight(20)
-    loot:SetPoint("LEFT", refetch, "RIGHT", 6, 0)
-    loot:SetText("Get loot")
-    loot:SetScript("OnClick", function()
-        --[[ The loot tables are a separate, rarely-changing download, so they
-             are asked for explicitly rather than with every list. ]]
-        if RB.Http and RB.Http() then
-            if RB.HttpBusy() then
-                say("still fetching; give it a moment.")
-            else
-                RB.HttpRaids()
-            end
-        elseif RB.FileAPI() then
-            pcall(WriteCustomFile, RB.REQUEST, "RAIDS", "w")
-            say("asked the watcher for the loot tables; |cffffffff/reload|r " ..
-                "once it says it has written them.")
-        else
-            say("|cffff5179Nampower's file API is missing|r.")
+    for _, p in ipairs(merged.softreserves or {}) do
+        s.items[key(p.name)] = p.items or {}
+        for _, it in ipairs(p.items or {}) do
+            if not s.holders[it.id] then s.holders[it.id] = {} end
+            table.insert(s.holders[it.id], p.name)
         end
-    end)
+    end
+    for _, h in ipairs(merged.hardreserves or {}) do s.hard[h.id] = true end
 
-    local wipe = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    wipe:SetWidth(80)
-    wipe:SetHeight(20)
-    wipe:SetPoint("LEFT", loot, "RIGHT", 6, 0)
-    wipe:SetText("Clear typed")
-    wipe:SetScript("OnClick", function()
-        RB.ClearManual()
-        RB.Refresh()
-        RB.Apply(true)
-        say("cleared everything added by hand; the fetched list is untouched.")
-    end)
+    if fetched then
+        for _, p in ipairs(fetched.softreserves or {}) do
+            local set = {}
+            for _, it in ipairs(p.items or {}) do set[it.id] = true end
+            s.web[key(p.name)] = set
+        end
+        s.instance = fetched.metadata and fetched.metadata.instance
+    end
 
-    RB.gui = f
-    return f
+    for k, row in pairs(RaidResBridge_Manual or {}) do
+        local set = {}
+        for _, it in ipairs(row.items or {}) do
+            set[it.id] = true
+            s.typedCount = s.typedCount + 1
+        end
+        s.typed[k] = set
+    end
+
+    s.players = RB.Players(s)
+    return s
+end
+
+--[[ Zones that are not called what raidres calls their raid.
+
+     Every other raid zone has its raid's exact name, the server's own
+     additions included (Tower of Karazhan, Lower Karazhan Halls, Emerald
+     Sanctum, Timbermaw Hold); the server's zone list, as pfQuest's database
+     has it, confirms them. World bosses are left out on purpose: they live
+     in open country, and standing in Azshara says nothing about Azuregos. ]]
+local ZONE_ALIAS = {
+    ["ahn'qiraj"] = "temple of ahn'qiraj",
+    ["blackrock spire"] = "upper blackrock spire",
+}
+
+-- Zone name -> cached raid id, rebuilt when the loot tables change.
+local zoneIndex, zoneIndexOf, zoneIndexBuilt = nil, nil, false
+local function raidForZone(zone)
+    if not zone or zone == "" then return nil end
+    if not zoneIndexBuilt or zoneIndexOf ~= RaidResBridge_Raids then
+        zoneIndex, zoneIndexOf, zoneIndexBuilt = {}, RaidResBridge_Raids, true
+        for id, raid in pairs(RaidResBridge_Raids or {}) do
+            zoneIndex[string.lower(raid.name or "")] = id
+        end
+    end
+    local want = string.lower(zone)
+    return zoneIndex[ZONE_ALIAS[want] or want]
+end
+
+--- The cached raid you're standing in, if any, and the zone's name.
+function RB.ZoneRaid()
+    local zone = GetRealZoneText and GetRealZoneText() or ""
+    return raidForZone(zone), zone
+end
+
+--[[ The raid your group is in: yours if you are in one, otherwise wherever
+     the most of your raid is -- one member inside is enough -- so the loot
+     is ready while you are still in town. The roster carries every member's
+     zone, the same one their unit tooltip shows, however far away they are.
+     Offline members don't count. A tie goes to the list's own raid when it
+     is one of them, otherwise to the raid that sorts first.
+
+     Returns the raid id, "zone" or "group", and how many are there. ]]
+function RB.GroupRaid(prefer)
+    local mine = RB.ZoneRaid()
+    if mine then return mine, "zone", 1 end
+    local counts = {}
+    local n = GetNumRaidMembers and GetNumRaidMembers() or 0
+    for i = 1, n do
+        local _, _, _, _, _, _, zone, online = GetRaidRosterInfo(i)
+        local id = online and raidForZone(zone)
+        if id then counts[id] = (counts[id] or 0) + 1 end
+    end
+    -- Sorted rather than picked in one pass, so a tie never depends on the
+    -- order pairs() happens to visit them in.
+    local raids = RaidResBridge_Raids or {}
+    local found = {}
+    for id, c in pairs(counts) do table.insert(found, { id = id, n = c }) end
+    if table.getn(found) == 0 then return nil end
+    table.sort(found, function(a, b)
+        if a.n ~= b.n then return a.n > b.n end
+        if (a.id == prefer) ~= (b.id == prefer) then return a.id == prefer end
+        return (raids[a.id].name or "") < (raids[b.id].name or "")
+    end)
+    return found[1].id, "group", found[1].n
+end
+
+--[[ Which instance the loot shows. The newest signal wins:
+
+       - a newly loaded list brings its own raid;
+       - the raid your group is in -- yours, or where the most of the raid
+         already is -- brings that raid when it changes. Checked after the
+         list, so opening the window with the raid inside shows that raid;
+       - the leader's own pick from the dropdown stands until either of
+         those happens again. Everyone leaving a raid changes nothing.
+
+     RB.raidWhy remembers which, so the window can say why it chose. ]]
+function RB.CurrentRaid(s)
+    local raids = RaidResBridge_Raids or {}
+    if s.ref and s.ref ~= RB.raidFor then
+        RB.raidFor = s.ref
+        if s.instance and raids[s.instance] then
+            RB.raid, RB.raidWhy = s.instance, "list"
+        end
+    end
+    local here, how, count = RB.GroupRaid(s.instance)
+    RB.raidSignalKey = tostring(here) .. ":" .. tostring(how) .. ":" .. tostring(count)
+    if here ~= RB.raidSignal then
+        RB.raidSignal = here
+        if here then RB.raid, RB.raidWhy, RB.raidCount = here, how, count end
+    elseif here and here == RB.raid and RB.raidWhy ~= nil and RB.raidWhy ~= "list" then
+        -- Same raid, but the reason or the head count moved on.
+        RB.raidWhy, RB.raidCount = how, count
+    end
+    if not (RB.raid and raids[RB.raid]) then
+        if here then
+            RB.raid, RB.raidWhy, RB.raidCount = here, how, count
+        elseif s.instance and raids[s.instance] then
+            RB.raid, RB.raidWhy = s.instance, "list"
+        else
+            local list = RB.RaidList()
+            RB.raid, RB.raidWhy = list[1] and list[1].id or nil, nil
+        end
+    end
+    return RB.raid and raids[RB.raid]
+end
+
+-- Every cached item by id, for naming reserves outside the current instance.
+local lootIndex, lootIndexOf, lootIndexBuilt = nil, nil, false
+local function lootItem(id)
+    if not lootIndexBuilt or lootIndexOf ~= RaidResBridge_Raids then
+        lootIndex, lootIndexOf, lootIndexBuilt = {}, RaidResBridge_Raids, true
+        for _, raid in pairs(RaidResBridge_Raids or {}) do
+            for _, it in ipairs(raid.items or {}) do lootIndex[it.g] = it end
+        end
+    end
+    return lootIndex[id]
+end
+
+--[[ Name, quality and icon for an item id, and whether the client has it.
+
+     The client's cache when it has the item, which also gives the icon;
+     the loot table's name otherwise. The fourth value matters: a tooltip
+     must not ask the client for an item it has never seen. ]]
+function RB.ItemInfo(id)
+    local name, quality, icon
+    if GetItemInfo then
+        -- 1.12: name, link, quality, minLevel, type, subType, stack, equipLoc, icon
+        local n, _, q, _, _, _, _, _, tex = GetItemInfo(id)
+        name, quality, icon = n, q, tex
+    end
+    if name then return name, quality or 1, icon, true end
+    local known = lootItem(id)
+    return (known and known.n) or ("item " .. tostring(id)), (known and known.q) or 1, nil, false
+end
+
+function RB.ItemLink(id)
+    local name, q = RB.ItemInfo(id)
+    return "|cff" .. qualityHex(q) .. "|Hitem:" .. id .. ":0:0:0|h[" .. name .. "]|h|r"
+end
+
+-- ---------------------------------------------------------------------------
+-- Acting on a click
+-- ---------------------------------------------------------------------------
+
+--[[ Say something about the last click: in the window when it is open, so the
+     answer is where the eyes are, and in chat when it is not. ]]
+function RB.Notice(msg)
+    local f = RB.gui
+    if f and f:IsVisible() then
+        f.notice, f.noticeUntil = msg, GetTime() + 4
+        RB.DrawHint()
+    else
+        say(msg)
+    end
+end
+
+--- After any change: redraw, and hand the merged list to RollFor.
+function RB.Commit()
+    RB.Refresh()
+    RB.Apply(true)
+end
+
+function RB.SelectPlayer(name)
+    if not name then return end
+    -- Clicking the selected player again lets go, so loot can be browsed
+    -- without a stray click reserving it for someone.
+    if RB.player and key(RB.player) == key(name) then
+        RB.player = nil
+    else
+        RB.player = name
+    end
+    RB.Draw()
+end
+
+function RB.SortPlayers(how)
+    RB.playerSort = how
+    RB.Refresh()
+end
+
+function RB.ToggleBoss(fold)
+    if not fold then return end
+    RB.collapsed = RB.collapsed or {}
+    RB.collapsed[fold] = not RB.collapsed[fold] or nil
+    RB.Draw()
+end
+
+-- The way the rest of 1.12 does it: a focused WIM whisper box first, then the
+-- chat box, but only while it is open.
+local function linkInChat(id)
+    local link = RB.ItemLink(id)
+    if WIM_EditBoxInFocus then
+        WIM_EditBoxInFocus:Insert(link)
+    elseif ChatFrameEditBox and ChatFrameEditBox:IsVisible() then
+        ChatFrameEditBox:Insert(link)
+    else
+        RB.Notice("open the chat box first (Enter), then shift-click the item.")
+    end
 end
 
 --[[ Clicking an item gives it to whoever is selected, or takes it back.
 
-     Only ever the typed list: an item somebody reserved on the website is
-     shown as theirs and cannot be removed here, because it would come straight
-     back on the next fetch and look like the window was lying. ]]
+     Only ever the typed list: an item somebody reserved on raidres is theirs,
+     and only raidres can change it. Shift-click links the item in chat and
+     ctrl-click tries it on, as everywhere else in the game. ]]
 function RB.ClickItem(data)
     if not data or not data.item then return end
-    local who = RB.player
-    if not who then
-        say("pick a player on the left first.")
-        return
-    end
     local id = data.item.g
     if not id then return end
 
-    if RB.RemoveManual(who, id) then
-        RB.Refresh()
-        RB.Apply(true)
+    if IsShiftKeyDown and IsShiftKeyDown() then
+        linkInChat(id)
+        return
+    end
+    if IsControlKeyDown and IsControlKeyDown() and DressUpItemLink then
+        DressUpItemLink("item:" .. id .. ":0:0:0")
         return
     end
 
-    local held = RB.WhoHas(id)
-    for i = 1, table.getn(held) do
-        if string.lower(held[i]) == string.lower(who) then
-            say(who .. " has that from the website; it cannot be removed here.")
-            return
-        end
+    local who = RB.player
+    if not who then
+        RB.Notice("pick a player on the left first.")
+        return
     end
 
-    local count = 0
-    for _, p in ipairs(RB.Merged().softreserves or {}) do
-        if string.lower(p.name) == string.lower(who) then
-            count = table.getn(p.items or {})
-        end
+    if RB.RemoveManual(who, id) then
+        RB.Commit()
+        return
     end
+
+    local s = RB.Snapshot()
+    local k = key(who)
+    if s.web[k] and s.web[k][id] then
+        RB.Notice(who .. " reserved that on raidres; change it there.")
+        return
+    end
+    if s.hard[id] then
+        RB.Notice("that item is hard-reserved, so nobody can soft-reserve it.")
+        return
+    end
+    local count = table.getn(s.items[k] or {})
     if count >= RB.Limit() then
-        say(who .. " already has " .. count .. " of " .. RB.Limit() ..
-            ". Remove one first.")
+        RB.Notice(who .. " already has " .. count .. " of " .. RB.Limit() ..
+            ". Take one back first.")
         return
     end
 
     local ok, err = RB.AddManual(who, id, data.item.q or 4)
     if not ok then
-        say("|cffffcc00" .. (err or "could not add that") .. "|r")
+        RB.Notice(err or "could not add that")
         return
     end
-    RB.Refresh()
-    RB.Apply(true)
+    RB.Commit()
 end
 
+--- Download every raid's loot table: in game with the DLL, else via the watcher.
+function RB.FetchLoot()
+    if RB.Http and RB.Http() then
+        if RB.HttpBusy() then
+            RB.Notice("still fetching; give it a moment.")
+        else
+            RB.HttpRaids()
+        end
+    elseif RB.FileAPI() then
+        pcall(WriteCustomFile, RB.REQUEST, "RAIDS", "w")
+        RB.Notice("asked the watcher for the loot tables. /reload once it has them.")
+    else
+        RB.Notice("can't download: needs RaidResHttp.dll, or Nampower and the watcher.")
+    end
+    RB.DrawStatus()
+end
+
+function RB.FetchFromBox()
+    local f = RB.gui
+    local text = f.link:GetText() or ""
+    f.link:ClearFocus()
+    if string.gsub(text, "%s", "") == "" then
+        RB.Notice("paste a raidres link first.")
+        return
+    end
+    RB.Request(text)
+    RB.DrawStatus()
+end
+
+--- A choice from the instance dropdown: a raid id, or "loot" to download them.
+function RB.PickRaid(value)
+    if value == nil then return end
+    if value == "loot" then
+        RB.FetchLoot()
+        return
+    end
+    RB.raid, RB.raidWhy = value, nil
+    RB.ResetScroll(RB.gui.lScroll)
+    RB.Draw()
+end
+
+-- ---------------------------------------------------------------------------
+-- Tooltips
+-- ---------------------------------------------------------------------------
+
+local function plainTip(owner, title, body)
+    GameTooltip:SetOwner(owner, "ANCHOR_TOPLEFT")
+    GameTooltip:SetText(title, 1, 0.82, 0)
+    if body and body ~= "" then GameTooltip:AddLine(body, 1, 1, 1, 1) end
+    GameTooltip:Show()
+end
+
+local function tip(frame, title, body)
+    frame.tipTitle, frame.tipBody = title, body
+    frame:SetScript("OnEnter", function() plainTip(this, this.tipTitle, this.tipBody) end)
+    frame:SetScript("OnLeave", function() GameTooltip:Hide() end)
+end
+
+local function addGrey(line) GameTooltip:AddLine(line, 0.5, 0.5, 0.5) end
+
+function RB.ItemTooltip(owner, id)
+    if not id then return end
+    local f = RB.gui
+    local s = f and f.snap
+    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+    local name, q, _, cached = RB.ItemInfo(id)
+    if cached then
+        GameTooltip:SetHyperlink("item:" .. id .. ":0:0:0")
+    else
+        -- Asking the client about an item it has never seen can disconnect
+        -- on some servers, so an unseen item gets its name and nothing more.
+        local r, g, b = rgb(qualityHex(q))
+        GameTooltip:SetText(name, r, g, b)
+        addGrey("Not seen in game yet, so no stats.")
+    end
+
+    if s then
+        local holders = s.holders[id] or {}
+        if s.hard[id] then
+            GameTooltip:AddLine("Hard reserved: nobody can soft-reserve it.", 1, 0.13, 0.13)
+        elseif table.getn(holders) > 0 then
+            GameTooltip:AddLine("Reserved by " .. table.concat(holders, ", "), 1, 0.82, 0)
+        else
+            addGrey("Nobody has reserved this yet.")
+        end
+
+        local who = RB.player
+        if who then
+            local k = key(who)
+            local mine = false
+            for _, it in ipairs(s.items[k] or {}) do
+                if it.id == id then mine = true end
+            end
+            if mine and s.web[k] and s.web[k][id] then
+                addGrey(who .. " reserved this on raidres.")
+            elseif mine then
+                GameTooltip:AddLine("Click: take it back from " .. who, 0.13, 1, 0.13)
+            elseif not s.hard[id] then
+                if table.getn(s.items[k] or {}) >= RB.Limit() then
+                    GameTooltip:AddLine(who .. " is full.", 1, 0.82, 0)
+                else
+                    GameTooltip:AddLine("Click: reserve for " .. who, 0.13, 1, 0.13)
+                end
+            end
+        else
+            addGrey("Pick a player to reserve this.")
+        end
+    end
+    addGrey("Shift-click: link in chat.  Ctrl-click: try it on.")
+    GameTooltip:Show()
+end
+
+function RB.PlayerTooltip(row)
+    local p = row.data
+    local s = RB.gui and RB.gui.snap
+    if not p or not s then return end
+    GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+    GameTooltip:SetText(p.name, rgb(classHex(p.class)))
+    if p.inRaid then
+        addGrey("In your group")
+    else
+        addGrey("Signed up on raidres, not in your group")
+    end
+    local k = key(p.name)
+    local items = s.items[k] or {}
+    if table.getn(items) == 0 then
+        GameTooltip:AddLine("No reserves yet", 1, 0.13, 0.13)
+    end
+    for _, it in ipairs(items) do
+        local name, q = RB.ItemInfo(it.id)
+        local typed = not (s.web[k] and s.web[k][it.id])
+        local r, g, b = rgb(qualityHex(q))
+        GameTooltip:AddLine(name .. (typed and "  (typed here)" or ""), r, g, b)
+    end
+    addGrey(RB.player and key(RB.player) == k and "Click to let go" or "Click to select")
+    GameTooltip:Show()
+end
+
+-- ---------------------------------------------------------------------------
+-- Widgets: the client's own
+-- ---------------------------------------------------------------------------
+
+local function text(parent, template, justify)
+    local fs = parent:CreateFontString(nil, "OVERLAY", template or "GameFontHighlightSmall")
+    fs:SetJustifyH(justify or "LEFT")
+    return fs
+end
+
+-- An Options-window box: grey border, its label sitting just above it.
+local function box(parent, label, w, h)
+    local b = CreateFrame("Frame", nil, parent)
+    b:SetWidth(w)
+    b:SetHeight(h)
+    b:SetBackdrop(BOX)
+    b:SetBackdropBorderColor(0.4, 0.4, 0.4)
+    b:SetBackdropColor(0, 0, 0, 0.3)
+    b.label = b:CreateFontString(nil, "BACKGROUND", "GameFontHighlightSmall")
+    b.label:SetPoint("BOTTOMLEFT", b, "TOPLEFT", 9, 3)
+    b.label:SetText(label)
+    return b
+end
+
+local function button(parent, label, w)
+    local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    b:SetWidth(w)
+    b:SetHeight(22)
+    b:SetText(label)
+    return b
+end
+
+local function checkbox(parent, name, label)
+    local c = CreateFrame("CheckButton", name, parent, "UICheckButtonTemplate")
+    c:SetWidth(24)
+    c:SetHeight(24)
+    c.label = getglobal(name .. "Text")
+    if c.label then
+        c.label:SetFontObject(GameFontNormalSmall)
+        c.label:SetText(label)
+    end
+    return c
+end
+
+-- The Who list's column header, sized the way the Who list sizes its own.
+local function columnHeader(parent, name, label, w)
+    local h = CreateFrame("Button", name, parent, "WhoFrameColumnHeaderTemplate")
+    if WhoFrameColumn_SetWidth then
+        WhoFrameColumn_SetWidth(w, h)
+    else
+        h:SetWidth(w)
+        local mid = getglobal(name .. "Middle")
+        if mid then mid:SetWidth(w - 9) end
+    end
+    h:SetText(label)
+    return h
+end
+
+-- An edit box with grey placeholder text while it is empty and unfocused.
+local function syncPlaceholder(e)
+    if e.focused or (e:GetText() or "") ~= "" then e.placeholder:Hide()
+    else e.placeholder:Show() end
+end
+
+local function editBox(parent, name, w, placeholder)
+    local e = CreateFrame("EditBox", name, parent, "InputBoxTemplate")
+    e:SetWidth(w)
+    e:SetHeight(20)
+    e:SetAutoFocus(false)
+    e.placeholder = text(e, "GameFontDisableSmall")
+    e.placeholder:SetPoint("LEFT", e, "LEFT", 1, 0)
+    e.placeholder:SetText(placeholder)
+    e:SetScript("OnEditFocusGained", function()
+        this.focused = true
+        this:HighlightText()
+        syncPlaceholder(this)
+    end)
+    e:SetScript("OnEditFocusLost", function()
+        this.focused = nil
+        this:HighlightText(0, 0)
+        syncPlaceholder(this)
+    end)
+    e:SetScript("OnEscapePressed", function() this:ClearFocus() end)
+    return e
+end
+
+--[[ A list row, lit the way the quest log and friends list light theirs: the
+     quest-title glow on hover, and the same glow held on the selected row. ]]
+local function listRow(parent, w)
+    local row = CreateFrame("Button", nil, parent)
+    row:SetWidth(w)
+    row:SetHeight(ROW_H)
+    row:SetHighlightTexture(HIGHLIGHT)
+    local hl = row:GetHighlightTexture()
+    if hl then hl:SetBlendMode("ADD") end
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetWidth(14)
+    row.icon:SetHeight(14)
+    row.icon:SetPoint("LEFT", row, "LEFT", 3, 0)
+    row.icon:Hide()
+    row.text = text(row)
+    row.text:SetHeight(ROW_H)
+    return row
+end
+
+local function setSelected(row, on)
+    row.selected = on
+    if on then row:LockHighlight() else row:UnlockHighlight() end
+end
+
+function RB.ResetScroll(sf)
+    if not sf then return end
+    sf.offset = 0
+    local bar = getglobal(sf:GetName() .. "ScrollBar")
+    if bar then bar:SetValue(0) end
+end
+
+local function scrollFrame(parent, name, w, rows, top)
+    local sf = CreateFrame("ScrollFrame", name, parent, "FauxScrollFrameTemplate")
+    sf:SetPoint("TOPLEFT", parent, "TOPLEFT", 8, -top)
+    sf:SetWidth(w)
+    sf:SetHeight(rows * ROW_H)
+    sf:SetScript("OnVerticalScroll", function()
+        FauxScrollFrame_OnVerticalScroll(ROW_H, RB.Draw)
+    end)
+    return sf
+end
+
+-- ---------------------------------------------------------------------------
+-- Building it
+-- ---------------------------------------------------------------------------
+
+local function buildPlayers(f)
+    local pb = box(f, "Players", P_W, P_H)
+    pb:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE, -BOX_TOP)
+    f.pBox = pb
+    local inner = P_W - 16 - SCROLLBAR
+
+    f.colName = columnHeader(pb, "ZyllaRaidResColName", "Name", inner - 50)
+    f.colName:SetPoint("TOPLEFT", pb, "TOPLEFT", 6, -6)
+    f.colName:SetScript("OnClick", function() RB.SortPlayers("name") end)
+    f.colCount = columnHeader(pb, "ZyllaRaidResColCount", "Reserves", 72)
+    f.colCount:SetPoint("LEFT", f.colName, "RIGHT", -2, 0)
+    f.colCount:SetScript("OnClick", function() RB.SortPlayers("need") end)
+
+    f.pScroll = scrollFrame(pb, "ZyllaRaidResPlayerScroll", inner, P_ROWS, P_LIST_TOP)
+    f.pRows = {}
+    for i = 1, P_ROWS do
+        local row = listRow(pb, inner)
+        row:SetPoint("TOPLEFT", pb, "TOPLEFT", 8, -P_LIST_TOP - (i - 1) * ROW_H)
+        row:SetFrameLevel(f.pScroll:GetFrameLevel() + 2)
+        row.text:SetPoint("LEFT", row, "LEFT", 6, 0)
+        row.text:SetWidth(inner - 50)
+        row.count = text(row, "GameFontHighlightSmall", "RIGHT")
+        row.count:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+        row.count:SetWidth(40)
+        row.count:SetHeight(ROW_H)
+        row:SetScript("OnClick", function()
+            if this.data then RB.SelectPlayer(this.data.name) end
+        end)
+        row:SetScript("OnEnter", function() RB.PlayerTooltip(this) end)
+        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        f.pRows[i] = row
+    end
+    f.pEmpty = text(pb, "GameFontDisableSmall", "CENTER")
+    f.pEmpty:SetPoint("TOP", pb, "TOP", 0, -P_LIST_TOP - 40)
+    f.pEmpty:SetWidth(inner)
+
+    -- beside the box's label, where the Options window puts a box's toggle
+    f.missing = checkbox(pb, "ZyllaRaidResMissing", "Missing only")
+    f.missing:SetPoint("RIGHT", pb, "TOPRIGHT", -80, 10)
+    f.missing:SetScript("OnClick", function()
+        RB.missingOnly = this:GetChecked() and true or false
+        RB.ResetScroll(RB.gui.pScroll)
+        RB.Draw()
+    end)
+    tip(f.missing, "Missing only", "Show only the players who still have reserves to make.")
+
+    -- the selected player's reserves
+    local db = box(f, "Reserves", P_W, D_H)
+    db:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE, -D_TOP)
+    f.dBox = db
+    f.dEmpty = text(db, "GameFontDisableSmall")
+    f.dEmpty:SetPoint("TOPLEFT", db, "TOPLEFT", 10, -10)
+    f.dEmpty:SetWidth(P_W - 20)
+
+    f.dRows = {}
+    for i = 1, D_ROWS do
+        local row = listRow(db, P_W - 16)
+        row:SetPoint("TOPLEFT", db, "TOPLEFT", 8, -7 - (i - 1) * ROW_H)
+        row.icon:Show()
+        row.text:SetPoint("LEFT", row.icon, "RIGHT", 5, 0)
+        row.text:SetWidth(P_W - 16 - 22 - 52)
+        row.tag = text(row, "GameFontDisableSmall", "RIGHT")
+        row.tag:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+        row.tag:SetWidth(48)
+        row.tag:SetHeight(ROW_H)
+        row.tag:SetText("raidres")
+        row.remove = CreateFrame("Button", nil, row, "UIPanelCloseButton")
+        row.remove:SetWidth(22)
+        row.remove:SetHeight(22)
+        row.remove:SetPoint("RIGHT", row, "RIGHT", 3, 0)
+        row.remove:SetScript("OnClick", function()
+            local r = this:GetParent()
+            if r.itemId and RB.player and RB.RemoveManual(RB.player, r.itemId) then
+                RB.Commit()
+            end
+        end)
+        tip(row.remove, "Take it back", "Remove this reserve. It was typed here, so it can go.")
+        row:SetScript("OnClick", function()
+            if this.itemId and IsShiftKeyDown and IsShiftKeyDown() then linkInChat(this.itemId) end
+        end)
+        row:SetScript("OnEnter", function() RB.ItemTooltip(this, this.itemId) end)
+        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        f.dRows[i] = row
+    end
+end
+
+local function onPickRaid() RB.PickRaid(this.value) end
+
+--[[ The instance dropdown's contents, built each time it opens: every cached
+     raid, the current one checked, and the download at the bottom. 1.12's
+     UIDropDownMenu calls an item's func with `this` as the clicked button,
+     so one shared func reads this.value rather than capturing anything. ]]
+function RB.InitRaidMenu()
+    local list = RB.RaidList()
+    for i = 1, table.getn(list) do
+        local r = list[i]
+        local info = {}
+        info.text = r.name
+        info.value = r.id
+        info.func = onPickRaid
+        info.checked = (r.id == RB.raid) and 1 or nil
+        UIDropDownMenu_AddButton(info)
+    end
+    local info = {}
+    info.text = hex(GREEN, table.getn(list) > 0 and "Update loot tables" or "Download loot tables")
+    info.value = "loot"
+    info.func = onPickRaid
+    UIDropDownMenu_AddButton(info)
+end
+
+local function buildLoot(f)
+    local lb = box(f, "Loot", L_W, L_H)
+    lb:SetPoint("TOPLEFT", f, "TOPLEFT", L_X, -BOX_TOP)
+    f.lBox = lb
+    local inner = L_W - 16 - SCROLLBAR
+
+    f.raidDrop = CreateFrame("Frame", "ZyllaRaidResRaidDrop", lb, "UIDropDownMenuTemplate")
+    f.raidDrop:SetPoint("TOPLEFT", lb, "TOPLEFT", -8, -4)
+    UIDropDownMenu_SetWidth(150, f.raidDrop)
+    UIDropDownMenu_Initialize(f.raidDrop, RB.InitRaidMenu)
+    if UIDropDownMenu_JustifyText then UIDropDownMenu_JustifyText("LEFT", f.raidDrop) end
+
+    f.search = editBox(lb, "ZyllaRaidResSearch", 108, "Search")
+    f.search:SetPoint("LEFT", f.raidDrop, "RIGHT", -6, 2)
+    f.search:SetScript("OnTextChanged", function()
+        RB.search = string.lower(this:GetText() or "")
+        syncPlaceholder(this)
+        RB.ResetScroll(RB.gui.lScroll)
+        RB.Draw()
+    end)
+    f.search:SetScript("OnEnterPressed", function() this:ClearFocus() end)
+
+    f.classOnly = checkbox(lb, "ZyllaRaidResClassOnly", "Usable")
+    f.classOnly:SetPoint("LEFT", f.search, "RIGHT", 8, -1)
+    f.classOnly:SetScript("OnClick", function()
+        RB.classOnly = this:GetChecked() and true or false
+        RB.ResetScroll(RB.gui.lScroll)
+        RB.Draw()
+    end)
+    tip(f.classOnly, "Usable only",
+        "Hide loot the selected player's class can't use, such as other classes' tier pieces.")
+
+    f.lScroll = scrollFrame(lb, "ZyllaRaidResLootScroll", inner, L_ROWS, L_LIST_TOP)
+    f.lRows = {}
+    for i = 1, L_ROWS do
+        local row = listRow(lb, inner)
+        row:SetPoint("TOPLEFT", lb, "TOPLEFT", 8, -L_LIST_TOP - (i - 1) * ROW_H)
+        row:SetFrameLevel(f.lScroll:GetFrameLevel() + 2)
+        row.text:SetPoint("LEFT", row.icon, "RIGHT", 5, 0)
+        row.text:SetWidth(inner - 22 - 146)
+        -- a boss: the quest log's +/- and its gold header text
+        row.toggle = row:CreateTexture(nil, "ARTWORK")
+        row.toggle:SetWidth(14)
+        row.toggle:SetHeight(14)
+        row.toggle:SetPoint("LEFT", row, "LEFT", 3, 0)
+        row.head = text(row, "GameFontNormal")
+        row.head:SetPoint("LEFT", row.toggle, "RIGHT", 4, 0)
+        row.head:SetWidth(inner - 30)
+        row.head:SetHeight(ROW_H)
+        row.check = row:CreateTexture(nil, "OVERLAY")
+        row.check:SetTexture(CHECK)
+        row.check:SetWidth(16)
+        row.check:SetHeight(16)
+        row.who = text(row, "GameFontHighlightSmall", "RIGHT")
+        row.who:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+        row.who:SetWidth(124)
+        row.who:SetHeight(ROW_H)
+        row.check:SetPoint("RIGHT", row.who, "LEFT", 0, 0)
+        row:SetScript("OnClick", function()
+            local d = this.data
+            if d and d.header then RB.ToggleBoss(d.fold) else RB.ClickItem(d) end
+        end)
+        row:SetScript("OnEnter", function()
+            if this.data and this.data.item then RB.ItemTooltip(this, this.data.item.g) end
+        end)
+        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        f.lRows[i] = row
+    end
+
+    f.lEmpty = text(lb, "GameFontHighlightSmall", "CENTER")
+    f.lEmpty:SetPoint("TOP", lb, "TOP", 0, -L_LIST_TOP - 90)
+    f.lEmpty:SetWidth(inner - 20)
+    f.lEmptyButton = button(lb, "Download loot tables", 160)
+    f.lEmptyButton:SetPoint("TOP", f.lEmpty, "BOTTOM", 0, -12)
+    f.lEmptyButton:SetScript("OnClick", function() RB.FetchLoot() end)
+end
+
+--[[ pfUI restyles Blizzard's windows; with it loaded, this one gets the same
+     treatment through pfUI's own skinning functions, so it matches whatever
+     pfUI theme is in use. Any trouble leaves the Blizzard look in place. ]]
+function RB.SkinForPfUI(f)
+    local api = pfUI and pfUI.api
+    if not api or not api.CreateBackdrop or not api.StripTextures then return false end
+    local ok = pcall(function()
+        f:SetBackdrop(nil)
+        f.header:Hide()
+        api.CreateBackdrop(f, nil, nil, 0.75)
+        if api.CreateBackdropShadow then api.CreateBackdropShadow(f) end
+        f.title:ClearAllPoints()
+        f.title:SetPoint("TOP", f, "TOP", 0, -10)
+        if api.SkinCloseButton then api.SkinCloseButton(f.close, f.backdrop or f, -6, -6) end
+        local boxes = { f.pBox, f.dBox, f.lBox }
+        for i = 1, table.getn(boxes) do
+            boxes[i]:SetBackdrop(nil)
+            api.CreateBackdrop(boxes[i], nil, true)
+        end
+        local buttons = { f.fetch, f.send, f.clear, f.lEmptyButton }
+        for i = 1, table.getn(buttons) do
+            if api.SkinButton then api.SkinButton(buttons[i]) end
+        end
+        local checks = { f.missing, f.classOnly }
+        for i = 1, table.getn(checks) do
+            if api.SkinCheckbox then api.SkinCheckbox(checks[i]) end
+        end
+        local edits = { f.link, f.search }
+        for i = 1, table.getn(edits) do
+            api.StripTextures(edits[i])
+            api.CreateBackdrop(edits[i])
+        end
+        if api.SkinDropDown then api.SkinDropDown(f.raidDrop, nil, nil, nil, true) end
+        local bars = { "ZyllaRaidResPlayerScrollScrollBar", "ZyllaRaidResLootScrollScrollBar" }
+        for i = 1, table.getn(bars) do
+            local bar = getglobal(bars[i])
+            if bar and api.SkinScrollbar then api.SkinScrollbar(bar) end
+        end
+        api.StripTextures(f.colName)
+        api.StripTextures(f.colCount)
+    end)
+    if not ok then
+        -- A pfUI that changed underneath us: put the Blizzard frame back.
+        if f.backdrop and f.backdrop.Hide then f.backdrop:Hide() end
+        f:SetBackdrop(DIALOG)
+        f.header:Show()
+        f.title:ClearAllPoints()
+        f.title:SetPoint("TOP", f.header, "TOP", 0, -14)
+    end
+    return ok
+end
+
+function RB.BuildGui()
+    if RB.gui then return RB.gui end
+
+    local f = CreateFrame("Frame", "ZyllaRaidResFrame", UIParent)
+    f:SetWidth(W)
+    f:SetHeight(H)
+    f:SetPoint("CENTER", UIParent, "CENTER", 0, 40)
+    -- HIGH, not DIALOG: the Clear typed confirmation is a StaticPopup on
+    -- DIALOG, and must open in front of this window, not behind it.
+    f:SetFrameStrata("HIGH")
+    if f.SetToplevel then f:SetToplevel(true) end
+    if f.SetClampedToScreen then f:SetClampedToScreen(true) end
+    f:SetBackdrop(DIALOG)
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:Hide()
+    table.insert(UISpecialFrames, "ZyllaRaidResFrame")
+    RB.gui = f
+
+    -- the header banner, as on the Game Menu and Options windows
+    f.header = f:CreateTexture(nil, "ARTWORK")
+    f.header:SetTexture("Interface\\DialogFrame\\UI-DialogBox-Header")
+    f.header:SetWidth(300)
+    f.header:SetHeight(64)
+    f.header:SetPoint("TOP", f, "TOP", 0, 12)
+    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    f.title:SetPoint("TOP", f.header, "TOP", 0, -14)
+    f.title:SetText("Zylla RaidRes")
+
+    -- The top edge is the drag handle, so a drag never starts on a list.
+    local bar = CreateFrame("Frame", nil, f)
+    bar:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -2)
+    bar:SetWidth(W - 60)
+    bar:SetHeight(28)
+    bar:EnableMouse(true)
+    bar:RegisterForDrag("LeftButton")
+    bar:SetScript("OnDragStart", function() this:GetParent():StartMoving() end)
+    bar:SetScript("OnDragStop", function() this:GetParent():StopMovingOrSizing() end)
+
+    f.close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    f.close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -5, -5)
+    f.close:SetScript("OnClick", function() this:GetParent():Hide() end)
+
+    -- fetching
+    local linkLabel = text(f, "GameFontNormalSmall")
+    linkLabel:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, -38)
+    linkLabel:SetText("Raidres link")
+    f.link = editBox(f, "ZyllaRaidResLink", 250, "Paste a link or code")
+    f.link:SetPoint("LEFT", linkLabel, "RIGHT", 12, 0)
+    f.link:SetMaxLetters(120)
+    f.link:SetScript("OnEnterPressed", function() RB.FetchFromBox() end)
+    f.link:SetScript("OnTextChanged", function() syncPlaceholder(this) end)
+
+    f.fetch = button(f, "Fetch", 70)
+    f.fetch:SetPoint("LEFT", f.link, "RIGHT", 6, 0)
+    f.fetch:SetScript("OnClick", function() RB.FetchFromBox() end)
+    tip(f.fetch, "Fetch", "")
+
+    f.status = text(f, "GameFontHighlightSmall")
+    f.status:SetPoint("LEFT", f.fetch, "RIGHT", 10, 0)
+    f.status:SetWidth(W - EDGE - (EDGE + 4 + 66 + 12 + 250 + 6 + 70 + 10))
+    f.status:SetHeight(ROW_H)
+
+    buildPlayers(f)
+    buildLoot(f)
+
+    -- footer
+    f.send = button(f, "Send to RollFor", 124)
+    f.send:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -EDGE + 2, 16)
+    f.send:SetScript("OnClick", function() RB.Apply() end)
+    tip(f.send, "Send to RollFor",
+        "Changes go to RollFor as you make them. This sends everything again, " ..
+        "e.g. after RollFor was reloaded.")
+
+    f.clear = button(f, "Clear typed", 100)
+    f.clear:SetPoint("RIGHT", f.send, "LEFT", -4, 0)
+    f.clear:SetScript("OnClick", function()
+        if StaticPopupDialogs and not StaticPopupDialogs.ZYLLARAIDRES_CLEAR then
+            StaticPopupDialogs.ZYLLARAIDRES_CLEAR = {
+                text = "Remove the %s reserve(s) added by hand?\nReserves made on raidres stay.",
+                button1 = YES or "Yes",
+                button2 = NO or "No",
+                OnAccept = function()
+                    RB.ClearManual()
+                    RB.Commit()
+                    RB.Notice("cleared everything added by hand.")
+                end,
+                timeout = 0, whileDead = 1, hideOnEscape = 1,
+            }
+        end
+        local s = RB.gui.snap
+        StaticPopup_Show("ZYLLARAIDRES_CLEAR", tostring(s and s.typedCount or 0))
+    end)
+    tip(f.clear, "Clear typed", "Remove every reserve added in this window. Asks first.")
+
+    f.hint = text(f, "GameFontNormalSmall")
+    f.hint:SetPoint("LEFT", f, "BOTTOMLEFT", EDGE + 4, 27)
+    f.hint:SetWidth(W - EDGE * 2 - 124 - 100 - 16)
+    f.hint:SetHeight(ROW_H)
+
+    f:SetScript("OnShow", function()
+        if PlaySound then PlaySound("igMainMenuOpen") end
+        RB.Refresh()
+        local box = RB.gui.link
+        local s = RB.gui.snap
+        if (box:GetText() or "") == "" and s and s.ref and s.ref ~= "manual" then
+            box:SetText("https://raidres.top/res/" .. s.ref)
+        end
+        syncPlaceholder(box)
+    end)
+    f:SetScript("OnHide", function()
+        if PlaySound then PlaySound("igMainMenuClose") end
+        if CloseDropDownMenus then CloseDropDownMenus() end
+        GameTooltip:Hide()
+    end)
+    -- Walking into a raid with the window open switches its loot.
+    f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+    f:SetScript("OnEvent", function()
+        if event == "ZONE_CHANGED_NEW_AREA" then RB.Refresh() end
+    end)
+    -- Cheap while open, nothing while closed: watches for a fetch finishing
+    -- and for the last notice running out.
+    f:SetScript("OnUpdate", function()
+        this.tick = (this.tick or 0) + arg1
+        if this.tick < 0.25 then return end
+        this.tick = 0
+        local busy = ((RB.HttpBusy and RB.HttpBusy()) or RB.waiting) and true or false
+        if busy ~= this.wasBusy then
+            this.wasBusy = busy
+            RB.DrawStatus()
+        end
+        if this.notice and GetTime() >= (this.noticeUntil or 0) then
+            this.notice = nil
+            RB.DrawHint()
+        end
+        --[[ Raid members change zones without telling us, so every few
+             seconds look at where they are. A full redraw only happens when
+             the answer changes -- which raid, or how many are in it. ]]
+        this.roster = (this.roster or 0) + 1
+        if this.roster >= 12 then
+            this.roster = 0
+            local snap = RB.gui.snap
+            local id, how, n = RB.GroupRaid(snap and snap.instance)
+            if tostring(id) .. ":" .. tostring(how) .. ":" .. tostring(n) ~= RB.raidSignalKey then
+                RB.Refresh()
+            end
+        end
+    end)
+
+    f.pfui = RB.SkinForPfUI(f)
+    return f
+end
+
+-- ---------------------------------------------------------------------------
+-- Drawing it
+-- ---------------------------------------------------------------------------
+
+function RB.DrawStatus()
+    local f = RB.gui
+    if not f then return end
+    local s = f.snap
+    local line
+    if RB.HttpBusy and RB.HttpBusy() then
+        line = hex(GOLD, "Fetching from raidres...")
+    elseif RB.waiting then
+        line = hex(GOLD, "Waiting for the watcher...")
+    elseif s and s.ref then
+        local raids = RaidResBridge_Raids or {}
+        local meta = s.merged.metadata or {}
+        local where = (s.instance and raids[s.instance] and raids[s.instance].name)
+            or (meta.instances and meta.instances[1]) or "?"
+        line = hex(WHITE, s.ref) .. hex(GREY, "  " .. where .. ", " ..
+            table.getn(s.merged.softreserves or {}) .. " on the list")
+    else
+        line = hex(GREY, "No list yet. Paste a link, or add reserves by hand.")
+    end
+    f.status:SetText(line)
+
+    if RB.Http and RB.Http() then
+        f.fetch.tipBody = "Fetches the list in game, through RaidResHttp.dll."
+    elseif RB.FileAPI() then
+        f.fetch.tipBody = "Asks the watcher script outside the game for the list."
+    else
+        f.fetch.tipBody = "Can't fetch: needs RaidResHttp.dll, or Nampower and the watcher."
+    end
+end
+
+function RB.DrawHint()
+    local f = RB.gui
+    if not f then return end
+    local s = f.snap
+    local line
+    if f.notice and GetTime() < (f.noticeUntil or 0) then
+        line = hex(WHITE, f.notice)
+    elseif not rollForReady() then
+        line = hex(RED, "RollFor isn't loaded, so reserves can't reach it.")
+    elseif not RB.player then
+        line = "Pick a player, then click loot to reserve it for them."
+    else
+        local n = table.getn(s and s.items[key(RB.player)] or {})
+        local limit = RB.Limit()
+        if n >= limit then
+            line = RB.player .. " is full. Click one of their items to take it back."
+        else
+            line = "Click loot to reserve it for " .. RB.player .. " (" ..
+                (limit - n) .. " left)."
+        end
+    end
+    f.hint:SetText(line)
+end
+
+local function selected(s)
+    if not RB.player then return nil end
+    local k = key(RB.player)
+    for _, p in ipairs(s.players) do
+        if key(p.name) == k then return p end
+    end
+    return { name = RB.player, count = table.getn(s.items[k] or {}) }
+end
+
+local function drawPlayers(f, s)
+    local limit = RB.Limit()
+    local list, done = {}, 0
+    for _, p in ipairs(s.players) do
+        if p.count >= limit then done = done + 1 end
+        if not RB.missingOnly or p.count < limit then table.insert(list, p) end
+    end
+    f.pBox.label:SetText("Players" .. hex(GREY, "  " .. done .. " of " ..
+        table.getn(s.players) .. " done"))
+    f.missing:SetChecked(RB.missingOnly)
+
+    local n = table.getn(list)
+    FauxScrollFrame_Update(f.pScroll, n, P_ROWS, ROW_H)
+    local offset = FauxScrollFrame_GetOffset(f.pScroll)
+    local sel = RB.player and key(RB.player)
+    for i = 1, P_ROWS do
+        local row = f.pRows[i]
+        local p = list[i + offset]
+        row.data = p
+        if p then
+            local full = p.count >= limit
+            row.text:SetText(hex(classHex(p.class), p.name) ..
+                (p.inRaid and "" or hex(GREY, "  not here")))
+            local cc = (p.count == 0 and RED) or (full and GREEN) or GOLD
+            row.count:SetText(hex(cc, p.count .. "/" .. limit))
+            row:SetAlpha(p.inRaid and 1 or 0.7)
+            setSelected(row, sel == key(p.name))
+            row:Show()
+        else
+            setSelected(row, false)
+            row:Hide()
+        end
+    end
+    if n == 0 then
+        f.pEmpty:SetText(RB.missingOnly and "Everyone has their reserves." or "Nobody yet.")
+        f.pEmpty:Show()
+    else
+        f.pEmpty:Hide()
+    end
+end
+
+local function drawDetail(f, s, sel)
+    for i = 1, D_ROWS do f.dRows[i]:Hide() end
+    if not RB.player then
+        f.dBox.label:SetText("Reserves")
+        f.dEmpty:SetText("Pick a player to see and change their reserves.")
+        f.dEmpty:Show()
+        return
+    end
+    local limit = RB.Limit()
+    local k = key(RB.player)
+    local items = s.items[k] or {}
+    local n = table.getn(items)
+    f.dBox.label:SetText(hex(classHex(sel and sel.class), RB.player) ..
+        hex(WHITE, "'s reserves") .. hex(GREY, "  " .. n .. " of " .. limit))
+    if n == 0 then
+        f.dEmpty:SetText("Nothing yet. Click loot to reserve it.")
+        f.dEmpty:Show()
+    else
+        f.dEmpty:Hide()
+    end
+
+    local web = s.web[k] or {}
+    local shown = n
+    if n > D_ROWS then shown = D_ROWS - 1 end
+    for i = 1, shown do
+        local it = items[i]
+        local row = f.dRows[i]
+        local name, q, icon = RB.ItemInfo(it.id)
+        row.itemId = it.id
+        row.icon:SetTexture(icon or QMARK)
+        row.icon:Show()
+        row.text:SetText(hex(qualityHex(q), name))
+        if web[it.id] then
+            row.tag:Show()
+            row.remove:Hide()
+        else
+            row.tag:Hide()
+            row.remove:Show()
+        end
+        row:Show()
+    end
+    if n > D_ROWS then
+        local row = f.dRows[D_ROWS]
+        row.itemId = nil
+        row.icon:Hide()
+        row.text:SetText(hex(GREY, "+" .. (n - shown) .. " more (hover their name)"))
+        row.tag:Hide()
+        row.remove:Hide()
+        row:Show()
+    end
+end
+
+-- Who holds an item, as it fits on a row: the selected player first.
+local function holdersText(holders, hard)
+    if hard then return hex(RED, "Hard reserve") end
+    local n = table.getn(holders)
+    if n == 0 then return "" end
+    local sk = RB.player and key(RB.player)
+    local ordered = {}
+    for _, name in ipairs(holders) do
+        if sk and key(name) == sk then table.insert(ordered, 1, name)
+        else table.insert(ordered, name) end
+    end
+    local parts = {}
+    for i = 1, math.min(n, 2) do
+        local name = ordered[i]
+        table.insert(parts, hex((sk and key(name) == sk) and GREEN or GOLD, name))
+    end
+    return table.concat(parts, hex(GREY, ", ")) ..
+        (n > 2 and hex(GREY, " +" .. (n - 2)) or "")
+end
+
+local function drawLoot(f, s, sel)
+    local cls = sel and sel.class
+    if cls then
+        f.classOnly:Enable()
+        if f.classOnly.label then f.classOnly.label:SetTextColor(1, 0.82, 0) end
+    else
+        f.classOnly:Disable()
+        if f.classOnly.label then f.classOnly.label:SetTextColor(0.5, 0.5, 0.5) end
+    end
+    f.classOnly:SetChecked(RB.classOnly)
+
+    local raid = RB.CurrentRaid(s)
+    if not raid then
+        UIDropDownMenu_SetText("No loot tables", f.raidDrop)
+        f.lEmpty:SetText("No loot tables yet.\nDownload them once; they only change " ..
+            "when the server patches.")
+        f.lEmpty:Show()
+        f.lEmptyButton:Show()
+        for i = 1, L_ROWS do f.lRows[i]:Hide() end
+        FauxScrollFrame_Update(f.lScroll, 0, L_ROWS, ROW_H)
+        return
+    end
+    f.lEmptyButton:Hide()
+    f.lBox.label:SetText("Loot" .. hex(GREY,
+        (RB.raidWhy == "zone" and "  you're here")
+        or (RB.raidWhy == "group" and ("  " .. (RB.raidCount or 1) ..
+            ((RB.raidCount or 1) == 1 and " of your raid is here" or " of your raid are here")))
+        or (RB.raidWhy == "list" and "  the list's raid") or ""))
+    UIDropDownMenu_SetSelectedValue(f.raidDrop, RB.raid)
+    UIDropDownMenu_SetText(raid.name, f.raidDrop)
+
+    local rows = RB.ItemRows(RB.raid, {
+        search = RB.search,
+        class = (RB.classOnly and cls) or nil,
+        collapsed = RB.collapsed,
+    })
+    local n = table.getn(rows)
+    if n == 0 then
+        f.lEmpty:SetText((RB.search and RB.search ~= "")
+            and ("Nothing in " .. raid.name .. " matches \"" .. RB.search .. "\".")
+            or "Nothing here for that class.")
+        f.lEmpty:Show()
+    else
+        f.lEmpty:Hide()
+    end
+
+    FauxScrollFrame_Update(f.lScroll, n, L_ROWS, ROW_H)
+    local offset = FauxScrollFrame_GetOffset(f.lScroll)
+
+    local mine, full = {}, false
+    if RB.player then
+        local items = s.items[key(RB.player)] or {}
+        for _, it in ipairs(items) do mine[it.id] = true end
+        full = table.getn(items) >= RB.Limit()
+    end
+
+    for i = 1, L_ROWS do
+        local row = f.lRows[i]
+        local d = rows[i + offset]
+        row.data = d
+        if d and d.header then
+            row.icon:Hide()
+            row.check:Hide()
+            row.text:SetText("")
+            row.who:SetText("")
+            row.toggle:SetTexture(d.collapsed and PLUS or MINUS)
+            row.toggle:Show()
+            row.head:SetText(d.header)
+            row.head:Show()
+            row:SetAlpha(1)
+            row:Show()
+        elseif d then
+            local it = d.item
+            local name, q, icon = RB.ItemInfo(it.g)
+            row.toggle:Hide()
+            row.head:Hide()
+            row.icon:SetTexture(icon or QMARK)
+            row.icon:Show()
+            row.text:SetText(hex(qualityHex(q), name))
+            row.who:SetText(holdersText(s.holders[it.g] or {}, s.hard[it.g]))
+            if mine[it.g] then row.check:Show() else row.check:Hide() end
+            row:SetAlpha((full and not mine[it.g]) and 0.45 or 1)
+            row:Show()
+        else
+            row:Hide()
+        end
+    end
+end
+
+--[[ Redraw from the last snapshot. Scrolling calls this directly, so a wheel
+     tick costs no file read. Guarded, because FauxScrollFrame_Update can
+     scroll back to the top -- which calls this again from inside itself. ]]
+function RB.Draw()
+    local f = RB.gui
+    if not f or not f:IsVisible() or not f.snap or f.drawing then return end
+    f.drawing = true
+    local ok, err = pcall(function()
+        local s = f.snap
+        local sel = selected(s)
+        RB.DrawStatus()
+        drawPlayers(f, s)
+        drawDetail(f, s, sel)
+        drawLoot(f, s, sel)
+        RB.DrawHint()
+        if s.typedCount > 0 then f.clear:Enable() else f.clear:Disable() end
+        if rollForReady() then f.send:Enable() else f.send:Disable() end
+    end)
+    f.drawing = nil
+    if not ok then error(err, 0) end
+end
+
+--- Recompute everything after the data changed, then redraw.
 function RB.Refresh()
     local f = RB.gui
     if not f or not f:IsVisible() then return end
-
-    local limit = RB.Limit()
-    local data = RB.Merged()
-    local total, manual = 0, 0
-    for _, p in ipairs(data.softreserves or {}) do
-        total = total + table.getn(p.items or {})
-    end
-    for _, row in pairs(RaidResBridge_Manual or {}) do
-        manual = manual + table.getn(row.items or {})
-    end
-    f.sub:SetText(total .. " reservation(s), limit " .. limit .. " each" ..
-        (manual > 0 and ("  |cff8fd3ff" .. manual .. " by hand|r") or ""))
-
-    -- left
-    local leftRows
-    if RB.pickingRaid then
-        f.leftHead:SetText("< back")
-        leftRows = RB.RaidList()
-    else
-        f.leftHead:SetText(RB.player or "pick a player")
-        leftRows = RB.Players()
-    end
-    for i = 1, ROWS do
-        local row = f.left[i]
-        local d = leftRows[i]
-        row.data = d
-        if d then
-            if d.raidId or d.id then
-                d.raidId = d.id
-                row.text:SetText("|cffffffff" .. d.name .. "|r |cff888888" ..
-                    d.count .. "|r")
-            else
-                local colour = CLASS_COLOUR[d.class or ""] or "ffffff"
-                local full = d.count >= limit
-                row.text:SetText("|cff" .. (full and "666666" or colour) ..
-                    d.name .. "|r  |cff" ..
-                    (full and "666666" or (d.count == 0 and "ff5179" or "888888")) ..
-                    d.count .. "/" .. limit .. "|r" ..
-                    (RB.player and string.lower(RB.player) == string.lower(d.name)
-                        and "  |cff8fd3ff<|r" or ""))
-            end
-            row:Show()
-        else
-            row:Hide()
-        end
-    end
-
-    -- right
-    local raids = RaidResBridge_Raids or {}
-    local raid = RB.raid and raids[RB.raid]
-    if not raid then
-        local list = RB.RaidList()
-        if table.getn(list) > 0 then
-            RB.raid = list[1].id
-            raid = raids[RB.raid]
-        end
-    end
-
-    if not raid then
-        f.rightHead:SetText("|cffffcc00no loot tables yet - press 'Get loot'|r")
-        for i = 1, ROWS do f.right[i]:Hide() end
-        FauxScrollFrame_Update(f.scroll, 0, ROWS, ROW_H)
-        return
-    end
-
-    f.rightHead:SetText(raid.name .. "  |cff888888(click the name on the left " ..
-        "to change)|r")
-    if not RB.pickingRaid then
-        f.leftHead:SetText((RB.player or "pick a player") .. "   |cff888888[" ..
-            raid.name .. "]|r")
-    end
-
-    local rows = RB.ItemRows(RB.raid)
-    local n = table.getn(rows)
-    FauxScrollFrame_Update(f.scroll, n, ROWS, ROW_H)
-    local offset = FauxScrollFrame_GetOffset(f.scroll)
-
-    for i = 1, ROWS do
-        local row = f.right[i]
-        local d = rows[i + offset]
-        row.data = d
-        if d then
-            if d.header then
-                row.text:SetText("|cffffd100" .. d.header .. "|r")
-            else
-                local it = d.item
-                local who = RB.WhoHas(it.g)
-                local colour = QUALITY[it.q] or "ffffff"
-                local tag = ""
-                if table.getn(who) > 0 then
-                    tag = "  |cff8fd3ff" .. table.concat(who, ", ") .. "|r"
-                end
-                row.text:SetText("  |cff" .. colour .. it.n .. "|r" .. tag)
-            end
-            row:Show()
-        else
-            row:Hide()
-        end
-    end
+    f.snap = RB.Snapshot()
+    RB.Draw()
 end
 
 function RB.ToggleGui()
@@ -488,7 +1542,10 @@ function RB.ToggleGui()
     if f:IsVisible() then
         f:Hide()
     else
+        RB.LoadRaids()
         f:Show()
-        RB.Refresh()
     end
 end
+
+-- The class filter starts on: it only ever hides other classes' items.
+if RB.classOnly == nil then RB.classOnly = true end
