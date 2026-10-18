@@ -2,13 +2,14 @@
 ## Title: Zylla RaidRes
 ## Notes: Fetch a raidres soft-reserve list into RollFor from in game. Fetches by itself with RaidResHttp.dll loaded; otherwise needs the watcher script running outside the game.
 ## Author: Salahaja
-## Version: 1.2.0
+## Version: 1.3.0
 ## X-Website: https://github.com/Salahaja/ZyllaRaidRes
 ## OptionalDeps: RollFor
-## SavedVariables: RaidResBridge_Manual, RaidResBridge_Limit
+## SavedVariables: RaidResBridge_Manual, RaidResBridge_Limit, RaidResBridge_Names
 
 RaidResBridge.lua
 Http.lua
+Names.lua
 
 # After the core: both use RB.Read and the slash handler.
 Manual.lua

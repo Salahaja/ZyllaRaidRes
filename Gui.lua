@@ -169,21 +169,7 @@ function RB.Players(snap)
                             count = counts[k] or 0, inRaid = inRaid })
     end
 
-    local raid = GetNumRaidMembers and GetNumRaidMembers() or 0
-    if raid > 0 then
-        for i = 1, raid do
-            local name, _, _, _, _, class = GetRaidRosterInfo(i)
-            add(name, class and string.upper(class), true)
-        end
-    else
-        local _, cls = UnitClass("player")
-        add(UnitName("player"), cls, true)
-        local party = GetNumPartyMembers and GetNumPartyMembers() or 0
-        for i = 1, party do
-            local _, c = UnitClass("party" .. i)
-            add(UnitName("party" .. i), c, true)
-        end
-    end
+    for _, r in ipairs(RB.Roster()) do add(r.name, r.class, true) end
     for _, p in ipairs(data.softreserves or {}) do add(p.name, nil, false) end
 
     local limit = RB.Limit()
@@ -288,10 +274,23 @@ end
      who holds what, which of a player's reserves came from raidres (locked)
      and which were typed here (removable), and what is hard-reserved. ]]
 function RB.Snapshot()
-    local fetched, _, ref = RB.Read()
+    local fetched, _, ref, matches, guesses, signups, members = (RB.Fetched or RB.Read)()
     local merged = RB.Merged()
     local s = { merged = merged, ref = ref, holders = {}, items = {},
                 web = {}, typed = {}, hard = {}, typedCount = 0 }
+
+    -- Who Names.lua paired up, and who is still loose on either side.
+    s.inRaid = (GetNumRaidMembers and GetNumRaidMembers() or 0) > 0
+    s.matchedBy, s.absent, s.free, s.guesses = {}, {}, {}, guesses or {}
+    s.toCheck = 0
+    for _, m in pairs(matches or {}) do s.matchedBy[key(m.name)] = m end
+    for _, n in ipairs(signups or {}) do
+        if not (matches and matches[key(n)]) then s.absent[key(n)] = n end
+    end
+    for _, n in ipairs(members or {}) do
+        if not s.matchedBy[key(n)] then s.free[key(n)] = n end
+    end
+    for _ in pairs(s.guesses) do s.toCheck = s.toCheck + 1 end
 
     for _, p in ipairs(merged.softreserves or {}) do
         s.items[key(p.name)] = p.items or {}
@@ -699,6 +698,16 @@ function RB.PlayerTooltip(row)
     else
         addGrey("Signed up on raidres, not in your group")
     end
+    local m = s.matchedBy[key(p.name)]
+    if m then
+        addGrey("Signed up as " .. m.signup ..
+            (m.how == "auto" and " (matched automatically)" or " (matched by you)"))
+    end
+    local g = not p.inRaid and s.inRaid and s.guesses[key(p.name)]
+    if g then
+        GameTooltip:AddLine("Maybe " .. g.name .. " in your raid? Select them and press Match.",
+            1, 0.82, 0, 1)
+    end
     local k = key(p.name)
     local items = s.items[k] or {}
     if table.getn(items) == 0 then
@@ -900,6 +909,22 @@ local function buildPlayers(f)
     f.dEmpty:SetPoint("TOPLEFT", db, "TOPLEFT", 10, -10)
     f.dEmpty:SetWidth(P_W - 20)
 
+    -- Settling who is who, when the names don't quite match.
+    f.matchBtn = CreateFrame("Button", "ZyllaRaidResMatchButton", db, "UIPanelButtonTemplate")
+    f.matchBtn:SetWidth(62)
+    f.matchBtn:SetHeight(18)
+    f.matchBtn:SetPoint("BOTTOMRIGHT", db, "TOPRIGHT", -4, 1)
+    f.matchBtn:SetText("Match")
+    f.matchBtn:SetScript("OnClick", function()
+        ToggleDropDownMenu(1, nil, RB.gui.matchMenu, "ZyllaRaidResMatchButton", 0, 0)
+    end)
+    tip(f.matchBtn, "Match names",
+        "Pair a raidres signup with the person in your raid when the names don't quite match.")
+    f.matchBtn:Hide()
+    f.matchMenu = CreateFrame("Frame", "ZyllaRaidResMatchMenu", f, "UIDropDownMenuTemplate")
+    f.matchMenu:Hide()
+    UIDropDownMenu_Initialize(f.matchMenu, RB.InitMatchMenu, "MENU")
+
     f.dRows = {}
     for i = 1, D_ROWS do
         local row = listRow(db, P_W - 16)
@@ -929,6 +954,83 @@ local function buildPlayers(f)
         row:SetScript("OnEnter", function() RB.ItemTooltip(this, this.itemId) end)
         row:SetScript("OnLeave", function() GameTooltip:Hide() end)
         f.dRows[i] = row
+    end
+end
+
+local function onPickMatch()
+    local c = RB.matchChoices and RB.matchChoices[this.value]
+    if not c then return end
+    RB.SetMatch(c.signup, c.member)
+    if c.member then RB.player = c.member end
+    if CloseDropDownMenus then CloseDropDownMenus() end
+    RB.Commit()
+end
+
+--[[ The Match menu, for whoever is selected:
+
+       - a signup who isn't in the raid: who is it here? Closest first, or
+         "Nobody here", which also stops it being guessed at;
+       - a raid member not on the list: which signup is it?
+       - a pair already matched: take it back, or keep an automatic one so
+         it can't change.
+
+     Each entry carries an index into RB.matchChoices, read back from
+     this.value when it is clicked -- nothing captured from a loop. ]]
+function RB.InitMatchMenu()
+    local f = RB.gui
+    local s = f and f.snap
+    local sel = RB.player
+    RB.matchChoices = {}
+    if not s or not sel then return end
+    local k = key(sel)
+
+    local function add(text, choice)
+        local info = {}
+        info.text = text
+        info.notCheckable = 1
+        if choice then
+            table.insert(RB.matchChoices, choice)
+            info.value = table.getn(RB.matchChoices)
+            info.func = onPickMatch
+        else
+            info.isTitle = 1
+        end
+        UIDropDownMenu_AddButton(info)
+    end
+    local function ranked(name, pool)
+        local out = {}
+        for _, n in pairs(pool) do
+            table.insert(out, { name = n, score = RB.NameScore(name, n) })
+        end
+        table.sort(out, function(a, b)
+            if a.score ~= b.score then return a.score > b.score end
+            return a.name < b.name
+        end)
+        return out
+    end
+
+    local m = s.matchedBy[k]
+    if m then
+        add(sel .. " signed up as " .. m.signup)
+        if m.how == "auto" then add("Keep this match", { signup = m.signup, member = sel }) end
+        add("Unmatch", { signup = m.signup, member = false })
+    elseif s.absent[k] then
+        add("Who is " .. sel .. " in your raid?")
+        local list = ranked(sel, s.free)
+        for i = 1, table.getn(list) do
+            local c = list[i]
+            add(c.name .. (c.score >= RB.NameGuess and hex(GREY, "  close match") or ""),
+                { signup = sel, member = c.name })
+        end
+        add(hex(GREY, "Nobody here"), { signup = sel, member = false })
+    elseif s.free[k] then
+        add("Which signup is " .. sel .. "?")
+        local list = ranked(sel, s.absent)
+        for i = 1, table.getn(list) do
+            local c = list[i]
+            add(c.name .. (c.score >= RB.NameGuess and hex(GREY, "  close match") or ""),
+                { signup = c.name, member = sel })
+        end
     end
 end
 
@@ -1052,7 +1154,7 @@ function RB.SkinForPfUI(f)
             boxes[i]:SetBackdrop(nil)
             api.CreateBackdrop(boxes[i], nil, true)
         end
-        local buttons = { f.fetch, f.send, f.clear, f.lEmptyButton }
+        local buttons = { f.fetch, f.send, f.clear, f.lEmptyButton, f.matchBtn }
         for i = 1, table.getn(buttons) do
             if api.SkinButton then api.SkinButton(buttons[i]) end
         end
@@ -1283,6 +1385,8 @@ function RB.DrawHint()
         line = hex(RED, "RollFor isn't loaded, so reserves can't reach it.")
     elseif not RB.player then
         line = "Pick a player, then click loot to reserve it for them."
+    elseif s and s.inRaid and s.absent[key(RB.player)] and next(s.free) ~= nil then
+        line = RB.player .. " isn't in your raid. If they're here under another name, press Match."
     else
         local n = table.getn(s and s.items[key(RB.player)] or {})
         local limit = RB.Limit()
@@ -1313,7 +1417,8 @@ local function drawPlayers(f, s)
         if not RB.missingOnly or p.count < limit then table.insert(list, p) end
     end
     f.pBox.label:SetText("Players" .. hex(GREY, "  " .. done .. " of " ..
-        table.getn(s.players) .. " done"))
+        table.getn(s.players) .. " done") ..
+        ((s.inRaid and s.toCheck > 0) and hex(GOLD, "  " .. s.toCheck .. " to check") or ""))
     f.missing:SetChecked(RB.missingOnly)
 
     local n = table.getn(list)
@@ -1326,8 +1431,15 @@ local function drawPlayers(f, s)
         row.data = p
         if p then
             local full = p.count >= limit
-            row.text:SetText(hex(classHex(p.class), p.name) ..
-                (p.inRaid and "" or hex(GREY, "  not here")))
+            local tag = ""
+            local m = s.matchedBy[key(p.name)]
+            if p.inRaid and m then
+                tag = hex(GREY, "  as " .. m.signup)
+            elseif not p.inRaid then
+                local g = s.inRaid and s.guesses[key(p.name)]
+                tag = g and hex(GOLD, "  maybe " .. g.name .. "?") or hex(GREY, "  not here")
+            end
+            row.text:SetText(hex(classHex(p.class), p.name) .. tag)
             local cc = (p.count == 0 and RED) or (full and GREEN) or GOLD
             row.count:SetText(hex(cc, p.count .. "/" .. limit))
             row:SetAlpha(p.inRaid and 1 or 0.7)
@@ -1348,6 +1460,14 @@ end
 
 local function drawDetail(f, s, sel)
     for i = 1, D_ROWS do f.dRows[i]:Hide() end
+    local mk = RB.player and key(RB.player)
+    local canMatch = false
+    if s.inRaid and mk then
+        if s.matchedBy[mk] then canMatch = true
+        elseif s.absent[mk] and next(s.free) ~= nil then canMatch = true
+        elseif s.free[mk] and next(s.absent) ~= nil then canMatch = true end
+    end
+    if canMatch then f.matchBtn:Show() else f.matchBtn:Hide() end
     if not RB.player then
         f.dBox.label:SetText("Reserves")
         f.dEmpty:SetText("Pick a player to see and change their reserves.")

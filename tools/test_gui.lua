@@ -164,6 +164,8 @@ UIDropDownMenu_SetSelectedValue = function(frame, v) frame.ddValue = v end
 UIDropDownMenu_JustifyText = function() end
 UIDropDownMenu_AddButton = function(info) table.insert(MENU, info) end
 CloseDropDownMenus = function() MENU_CLOSED = true end
+-- ToggleDropDownMenu(level, value, frame, anchor): opening a menu builds it.
+ToggleDropDownMenu = function(_, _, frame) MENU = {}; frame.ddInit(); frame.ddOpen = true end
 local function openMenu(dd)
     MENU = {}
     dd.ddInit()
@@ -180,7 +182,7 @@ end
 local SAID, FILES, IMPORTED, POPUP, NOW, SHIFT, CTRL, CACHED, TIP, DRESSED
 local ROSTER, SOUNDS, SHOWN, REFS
 
-local function world()
+local function world(withoutNames)
     NAMED = {}
     SAID, FILES, IMPORTED, POPUP, NOW, SHIFT, CTRL = {}, {}, nil, nil, 100, false, false
     CACHED, DRESSED, SOUNDS = {}, nil, {}
@@ -247,6 +249,8 @@ local function world()
 
     dofile(ROOT .. "RaidResBridge.lua")
     dofile(ROOT .. "Http.lua")
+    RaidResBridge_Names = nil
+    if not withoutNames then dofile(ROOT .. "Names.lua") end
     dofile(ROOT .. "Manual.lua")
     dofile(ROOT .. "Gui.lua")
     dofile(ROOT .. "Chat.lua")
@@ -891,6 +895,101 @@ ChatFrameEditBox.shown = false
 SetItemRef("item:19802:0:0:0", "[Heart of Hakkar]", "LeftButton")
 check("other links go on to the game as usual", REFS[1], "item:19802:0:0:0")
 
+-- ================================================================== names
+print("matching names")
+-- A row anywhere in the list, scrolling to it: full players sort below the
+-- visible rows.
+local function findAnywhere(text)
+    local g = RB.gui
+    for off = 0, (g.pScroll.total or 0) do
+        NAMED.ZyllaRaidResPlayerScrollScrollBar:SetValue(off * 18)
+        local r = findRow(g.pRows, text)
+        if r then return r end
+    end
+end
+RB = world()
+ROSTER = {
+    { "Tester", "WARRIOR" }, { "Newbie", "MAGE" }, { "Zed", "ROGUE" },
+    { "Aldwyn", "PALADIN" }, { "Brisa", "PRIEST" }, { "Corvanne", "WARLOCK" },
+    { "Ivo", "HUNTER" }, { "Ivar", "DRUID" },
+}
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+local corv = findRow(f.pRows, "Corvanne")
+check("a typo'd signup shows under their in-game name", corv and rowText(corv), "Corvanne  as Corvane")
+check("with their reserves counted", corv and plain(corv.count:GetText()), "2/2")
+check("and the raidres name doesn't show twice", findRow(f.pRows, "Corvane  "), nil)
+check("the label says how many need a look",
+    string.find(plain(f.pBox.label:GetText()), "1 to check", 1, true) ~= nil, true)
+enter(corv)
+check("the tooltip says how it was matched", tipHas("Signed up as Corvane (matched automatically)"), true)
+
+NAMED.ZyllaRaidResPlayerScrollScrollBar:SetValue(5 * 18)
+local ivor = findRow(f.pRows, "Ivor")
+check("an unsure one is offered, not matched", ivor and rowText(ivor), "Ivor  maybe Ivar?")
+click(ivor)
+check("selecting it shows Match", f.matchBtn:IsShown(), true)
+check("and the hint says what it's for",
+    string.find(hint(f), "Ivor isn't in your raid. If they're here under another name, press Match.", 1, true) ~= nil, true)
+click(f.matchBtn)
+check("Match opens its menu", f.matchMenu.ddOpen, true)
+check("asking who it is", plain(MENU[1].text), "Who is Ivor in your raid?")
+check("closest first", plain(MENU[2].text), "Ivar  close match")
+check("then the other close one", plain(MENU[3].text), "Ivo  close match")
+check("and nobody, last", plain(MENU[table.getn(MENU)].text), "Nobody here")
+pick(MENU[3])
+check("picking one remembers it", RaidResBridge_Names.ivor, "Ivo")
+check("the selection follows them", RB.player, "Ivo")
+RB.ResetScroll(f.pScroll)
+check("they now hold the reserves", findAnywhere("Ivo  as Ivor") ~= nil, true)
+local sentIvo = false
+for _, p in ipairs(IMPORTED.softreserves) do if p.name == "Ivo" then sentIvo = true end end
+check("and RollFor knows them by it", sentIvo, true)
+check("nothing left to check", string.find(plain(f.pBox.label:GetText()), "to check", 1, true), nil)
+
+click(f.matchBtn)
+check("a matched pair can be taken back", plain(MENU[1].text), "Ivo signed up as Ivor")
+check("a pick of yours has nothing to keep", plain(MENU[2].text), "Unmatch")
+pick(MENU[2])
+check("unmatching says they're nobody here", RaidResBridge_Names.ivor, false)
+check("so they aren't guessed at again", findRow(f.pRows, "maybe"), nil)
+
+click(findAnywhere("Corvanne"))
+click(f.matchBtn)
+check("an automatic match can be kept", plain(MENU[2].text), "Keep this match")
+pick(MENU[2])
+check("keeping it pins it", RaidResBridge_Names.corvane, "Corvanne")
+
+click(findAnywhere("Newbie"))
+click(f.matchBtn)
+check("a raid member not on the list can be given a signup", plain(MENU[1].text), "Which signup is Newbie?")
+local lumi
+for _, info in ipairs(MENU) do if plain(info.text) == "Lumi" then lumi = info end end
+pick(lumi)
+check("which is remembered the other way round", RaidResBridge_Names.lumi, "Newbie")
+local nl = findAnywhere("Newbie  as Lumi")
+check("Newbie now holds Lumi's reserves", nl and plain(nl.count:GetText()), "2/2")
+
+click(findAnywhere("Aldwyn"))
+check("someone matched exactly has no Match button", f.matchBtn:IsShown(), false)
+
+RB = world()
+GetNumRaidMembers = function() return 0 end
+SlashCmdList.RAIDRESBRIDGE("")
+click(findRow(RB.gui.pRows, "Ivor"))
+check("outside a raid there's nothing to match", RB.gui.matchBtn:IsShown(), false)
+
+print("updated mid-session")
+-- A /reload after an update that added Names.lua keeps the old file list,
+-- so the window must work without it.
+RB = world(true)
+SlashCmdList.RAIDRESBRIDGE("")
+check("without Names.lua the window still opens", RB.gui and RB.gui:IsVisible(), true)
+check("lists the raid", findRow(RB.gui.pRows, "Newbie") ~= nil, true)
+click(findRow(RB.gui.pRows, "Newbie"))
+check("works", RB.player, "Newbie")
+check("just without matching", RB.gui.matchBtn:IsShown(), false)
+
 -- ================================================================== pfUI
 print("with pfUI")
 RB = world()
@@ -908,7 +1007,7 @@ SlashCmdList.RAIDRESBRIDGE("")
 f = RB.gui
 check("pfUI skins it", f.pfui, true)
 check("its frame and three boxes", CALLS.CreateBackdrop >= 4, true)
-check("its four buttons", CALLS.SkinButton, 4)
+check("its five buttons", CALLS.SkinButton, 5)
 check("both checkboxes", CALLS.SkinCheckbox, 2)
 check("the dropdown", CALLS.SkinDropDown, 1)
 check("both scroll bars", CALLS.SkinScrollbar, 2)

@@ -124,6 +124,8 @@ local function world(withDll)
     dofile(ROOT .. "RaidResBridge.lua")
     local before = table.getn(FRAMES)
     dofile(ROOT .. "Http.lua")
+    RaidResBridge_Names = nil
+    dofile(ROOT .. "Names.lua")
     DRIVER = FRAMES[before + 1]
     dofile(ROOT .. "Manual.lua")
     dofile(ROOT .. "Gui.lua")
@@ -361,6 +363,36 @@ do
     check("says it is waiting for it", heard("waiting for the watcher"), true)
     SlashCmdList.RAIDRESBRIDGE("help")
     check("help mentions the DLL", heard("RaidResHttp.dll"), true)
+end
+
+-- ================================================================== /rrb debug
+print("/rrb debug")
+do
+    local RB = world(true)
+    serve()
+    RaidResHttpStatus = function() return 1, 2, 3, 4.4 end
+    PENDING_LOOKS = 100000
+    SlashCmdList.RAIDRESBRIDGE("DEMO42")
+    NOW = NOW + 7
+    SAID = {}
+    SlashCmdList.RAIDRESBRIDGE("debug")
+    check("debug reports the DLL's threads", heard("1 talking, 2 waiting their turn, 3 not yet collected; oldest 4s"), true)
+    check("and the addon's own waits", heard("waiting on 1 request(s); oldest 7s"), true)
+    check("no alarm while all is well", heard("outlived its deadline"), false)
+    RaidResHttpStatus = function() return 1, 0, 1, 90 end
+    SAID = {}
+    SlashCmdList.RAIDRESBRIDGE("debug")
+    check("a request past its deadline is called out", heard("outlived its deadline"), true)
+    RaidResHttpStatus = nil
+    SAID = {}
+    SlashCmdList.RAIDRESBRIDGE("debug")
+    check("an older DLL is named as such", heard("older build"), true)
+end
+do
+    local RB = world(false)
+    SAID = {}
+    SlashCmdList.RAIDRESBRIDGE("debug")
+    check("and no DLL at all is said plainly", heard("isn't loaded"), true)
 end
 
 print(string.format("\n%d check(s), %d failure(s)", checks, failures))

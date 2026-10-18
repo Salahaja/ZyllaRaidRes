@@ -9,6 +9,9 @@
 //       "failed", message          never got an answer
 //       nil, "unknown request"     no such id, or already collected
 //
+//   talking, queued, uncollected, oldest = RaidResHttpStatus()
+//       what the DLL is doing right now, for /rrb debug
+//
 // The host is fixed and only GET is possible. A general "fetch any URL" would
 // hand every installed addon a way to send your data anywhere; this can only
 // read pages off one site that publishes soft-reserve lists.
@@ -16,6 +19,14 @@
 // The request runs on a thread of its own. The game's main thread never waits
 // on the network, and Lua is never touched from that thread -- the result sits
 // in a table until Lua comes and asks for it.
+//
+// Those threads must never cost the game anything, so (since 1.3.0):
+//   - every request has a hard deadline, however slowly the server answers;
+//   - at most MAX_TALKING talk to the network at once, the rest wait their turn;
+//   - they run below normal priority, so the game's own threads always win;
+//   - a read that returns nothing ends the reply instead of asking again.
+// 1.1.0 had none of these: a stalled or trickling connection kept its thread
+// alive with no end, and a zero-byte read could spin a core.
 //
 // Lua functions are registered from a hook on the engine's LoadScriptFunctions,
 // which runs every time the UI's Lua state is rebuilt (login, /reload), so the
@@ -80,11 +91,25 @@ const auto PushLString = reinterpret_cast<pushlstring_t>(0x006F3840);
 
 namespace {
 
+#ifdef RAIDRES_TEST_SERVER
+// test_local.exe: a plain-HTTP fake server on this machine that misbehaves
+// on purpose, and short limits so the tests don't take minutes.
+const wchar_t *const HOST = L"127.0.0.1";
+const INTERNET_PORT PORT = RAIDRES_TEST_SERVER;
+const DWORD SECURE = 0;
+const DWORD TIMEOUT_MS = 2000;            // any one wait on the network
+const DWORD DEADLINE_MS = 5000;           // the whole request
+#else
 const wchar_t *const HOST = L"raidres.top";
+const INTERNET_PORT PORT = INTERNET_DEFAULT_HTTPS_PORT;
+const DWORD SECURE = WINHTTP_FLAG_SECURE;
+const DWORD TIMEOUT_MS = 10000;
+const DWORD DEADLINE_MS = 30000;
+#endif
 const size_t MAX_PATH_LEN = 256;
 const size_t MAX_BODY = 4 * 1024 * 1024;  // the biggest raid file is ~80 KB
 const size_t MAX_KEPT = 16;               // results nobody collected, e.g. across a /reload
-const DWORD TIMEOUT_MS = 20000;
+const LONG MAX_TALKING = 3;               // requests on the network at once
 
 enum class State { Pending, Done, Failed };
 
@@ -92,11 +117,16 @@ struct Request {
     State state = State::Pending;
     DWORD status = 0;
     std::string body;   // the page, or the reason it failed
+    DWORD started = 0;  // GetTickCount when it was asked for
 };
 
 CRITICAL_SECTION g_lock;
 std::map<int, Request> g_requests;
 int g_nextId = 1;
+
+HANDLE g_slots = nullptr;        // a semaphore, MAX_TALKING wide
+volatile LONG g_talking = 0;     // threads on the network now
+volatile LONG g_queued = 0;      // threads waiting for a slot
 
 struct Job {
     int id;
@@ -141,6 +171,7 @@ void Finish(int id, State state, DWORD status, std::string body) {
 bool Fetch(const std::wstring &path, DWORD &status, std::string &body) {
     bool ok = false;
     HINTERNET session = nullptr, connect = nullptr, request = nullptr;
+    const DWORD began = GetTickCount();
 
     session = WinHttpOpen(L"RaidResHttp/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                           WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -153,11 +184,11 @@ bool Fetch(const std::wstring &path, DWORD &status, std::string &body) {
         WinHttpSetOption(session, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols));
     }
 
-    connect = WinHttpConnect(session, HOST, INTERNET_DEFAULT_HTTPS_PORT, 0);
+    connect = WinHttpConnect(session, HOST, PORT, 0);
     if (!connect) { body = WinError("WinHttpConnect", GetLastError()); goto done; }
 
     request = WinHttpOpenRequest(connect, L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER,
-                                 WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+                                 WINHTTP_DEFAULT_ACCEPT_TYPES, SECURE);
     if (!request) { body = WinError("WinHttpOpenRequest", GetLastError()); goto done; }
     {
         // A redirect could take the request to another host, which is the one
@@ -180,6 +211,12 @@ bool Fetch(const std::wstring &path, DWORD &status, std::string &body) {
     }
 
     for (;;) {
+        // However slowly it trickles in: each wait is bounded by TIMEOUT_MS,
+        // and this bounds them all together.
+        if (GetTickCount() - began > DEADLINE_MS) {
+            body = "raidres took too long to answer";
+            goto done;
+        }
         DWORD avail = 0;
         if (!WinHttpQueryDataAvailable(request, &avail)) {
             body = WinError("reading the reply", GetLastError());
@@ -195,6 +232,7 @@ bool Fetch(const std::wstring &path, DWORD &status, std::string &body) {
             goto done;
         }
         body.resize(at + got);
+        if (got == 0) break;   // nothing more is coming; asking again would spin
     }
     ok = true;
 
@@ -207,9 +245,24 @@ done:
 
 DWORD WINAPI Worker(LPVOID arg) {
     Job *job = static_cast<Job *>(arg);
+    // Below the game's own threads, always: a fetch can wait a moment longer,
+    // a frame can't.
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+
+    // Wait for one of MAX_TALKING slots. Waiting costs nothing; every slot
+    // comes back within DEADLINE_MS plus one TIMEOUT_MS.
+    InterlockedIncrement(&g_queued);
+    WaitForSingleObject(g_slots, INFINITE);
+    InterlockedDecrement(&g_queued);
+    InterlockedIncrement(&g_talking);
+
     DWORD status = 0;
     std::string body;
     bool ok = Fetch(job->path, status, body);
+
+    InterlockedDecrement(&g_talking);
+    ReleaseSemaphore(g_slots, 1, nullptr);
+
     Finish(job->id, ok ? State::Done : State::Failed, status, std::move(body));
     delete job;
     return 0;
@@ -239,7 +292,7 @@ int Start(const char *path, std::string &why) {
         return 0;
     }
     int id = g_nextId++;
-    g_requests[id];
+    g_requests[id].started = GetTickCount();
     LeaveCriticalSection(&g_lock);
 
     Job *job = new Job;
@@ -256,6 +309,31 @@ int Start(const char *path, std::string &why) {
     }
     CloseHandle(t);
     return id;
+}
+
+// Once, before any request: from DllMain in the game, from main() in tests.
+void InitRequests() {
+    InitializeCriticalSection(&g_lock);
+    g_slots = CreateSemaphoreW(nullptr, MAX_TALKING, MAX_TALKING, nullptr);
+}
+
+struct Status {
+    LONG talking, queued;
+    int uncollected;      // finished or pending, not yet handed to Lua
+    DWORD oldestMs;       // the longest any pending request has been waiting
+};
+
+Status GetStatus() {
+    Status st = { g_talking, g_queued, 0, 0 };
+    DWORD now = GetTickCount();
+    EnterCriticalSection(&g_lock);
+    for (auto it = g_requests.begin(); it != g_requests.end(); ++it) {
+        st.uncollected++;
+        if (it->second.state == State::Pending && now - it->second.started > st.oldestMs)
+            st.oldestMs = now - it->second.started;
+    }
+    LeaveCriticalSection(&g_lock);
+    return st;
 }
 
 // ---------------------------------------------------------------------------
@@ -331,12 +409,23 @@ int __fastcall Lua_Result(void *L) {
 // Hooks
 // ---------------------------------------------------------------------------
 
+int __fastcall Lua_Status(void *L) {
+    using namespace Client;
+    Status st = GetStatus();
+    PushNumber(L, st.talking);
+    PushNumber(L, st.queued);
+    PushNumber(L, st.uncollected);
+    PushNumber(L, st.oldestMs / 1000.0);
+    return 4;
+}
+
 Client::LoadScriptFunctions_t LoadScriptFunctions_o = nullptr;
 
 void __fastcall LoadScriptFunctions_h() {
     LoadScriptFunctions_o();
     Client::RegisterFunction("RaidResHttpGet", Lua_Get);
     Client::RegisterFunction("RaidResHttpResult", Lua_Result);
+    Client::RegisterFunction("RaidResHttpStatus", Lua_Status);
 }
 
 void __fastcall InvalidFunctionPtrCheck_h() {}
@@ -384,7 +473,7 @@ extern "C" DWORD Load() { return EnsureInitialized(); }
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(module);
-        InitializeCriticalSection(&g_lock);
+        InitRequests();
         // Not loaded by VanillaFixes: nothing will call Load, so install from a
         // thread of our own, which cannot start until the loader lock is free.
         if (GetModuleHandleW(L"VfPatcher.dll") == nullptr) {

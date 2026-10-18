@@ -91,7 +91,8 @@ end
      an extra line meant it, and silently dropping either would be the kind of
      wrong that only shows up when the item drops. ]]
 function RB.Merged()
-    local fetched = RB.Read()
+    -- Renamed to the in-game names of whoever Names.lua matched.
+    local fetched = (RB.Fetched or RB.Read)()
     local data
     if fetched then
         data = { metadata = fetched.metadata,
