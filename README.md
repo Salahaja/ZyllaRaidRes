@@ -65,6 +65,33 @@ field. Fetching a list also caches that raid's loot table for the window, and
 The DLL's source, build script and notes are in [`dll/`](dll). It's built
 with Visual Studio 2022 Build Tools, 32-bit, with a static runtime.
 
+## Matching names
+
+raidres names are whatever people typed at signup: a typo, an accent the
+keyboard didn't have, last week's alt. Unmatched, the same person shows twice,
+once in the raid with nothing reserved and once on the list marked *not here*.
+RollFor would give their reserves to nobody.
+
+- **It matches them the way RollFor does.** Raid members who aren't on the
+  list are paired with signups who aren't in the raid, by how alike the names
+  are. Accents and case don't count, so *Jörunn* is *Jorunn*.
+- **Only clear-cut pairs are matched:** at least 75% alike, and clearly the
+  best pairing for both people. A matched member shows as **Corvanne · as
+  Corvane**, with that signup's reserves.
+- **Anything less is offered.** An unmatched signup shows **maybe Ivar?** when
+  someone comes close (60% or more), and the Players label counts them (*1 to
+  check*).
+- **Match settles the rest.** Select the person and press **Match** (in a raid):
+  - *Who is Ivor in your raid?* for a signup, closest first, or **Nobody
+    here**, which also stops it being guessed at again.
+  - *Which signup is Ivo?* for a raid member who isn't on the list.
+  - **Unmatch**, or **Keep this match** to pin an automatic one.
+- **Your choices are remembered** across sessions, in
+  `RaidResBridge_Names`. People tend to sign up the same way every week.
+- **RollFor gets the in-game names.** The list is renamed before it's sent, so
+  RollFor sees exact matches and has nothing left to guess for those players.
+  The fetched list itself is never changed, so unmatching restores it.
+
 ## Links in raid chat
 
 When someone posts a raidres link in **raid chat**, it shows as a clickable
@@ -275,6 +302,7 @@ is an ordinary case.
 | `/rrb <link>` | fetch that list and import it |
 | `/rrb load` | import what was fetched, plus anything typed |
 | `/rrb help` | the commands, and how it's fetching |
+| `/rrb debug` | what RaidResHttp.dll is doing right now: requests talking, queued, and the oldest one's age |
 
 Also `/raidres`. `/rrb gui` still works.
 
@@ -284,10 +312,10 @@ Run with Lua 5.x from anywhere. Each prints its checks and exits non-zero on a
 failure.
 
 ```bash
-lua tools/test_bridge.lua   # reading lists, the merge, typed reserves  (86)
-lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (76)
-lua tools/test_gui.lua      # the window and raid-chat links, clicked   (214)
-lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Manual.lua Gui.lua Chat.lua
+lua tools/test_bridge.lua   # lists, the merge, typed reserves, names   (117)
+lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (82)
+lua tools/test_gui.lua      # the window, chat links, matching, clicked (247)
+lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Chat.lua
 ```
 
 - **The fixtures** in `tools/fixtures` are real raidres replies with the

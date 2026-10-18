@@ -36,6 +36,33 @@ function RB.FileAPI()
     return WriteCustomFile ~= nil and ReadCustomFile ~= nil
 end
 
+--[[ Who is in your group: the raid, or your party and you.
+
+     Here in the core rather than in Names.lua, because the window needs it
+     even when Names.lua didn't load -- a /reload after an update that added
+     the file keeps the old file list until the game restarts. ]]
+function RB.Roster()
+    local out = {}
+    local raid = GetNumRaidMembers and GetNumRaidMembers() or 0
+    if raid > 0 then
+        for i = 1, raid do
+            local name, _, _, _, _, class = GetRaidRosterInfo(i)
+            if name then table.insert(out, { name = name, class = class and string.upper(class) }) end
+        end
+    else
+        local _, cls = UnitClass("player")
+        local me = UnitName("player")
+        if me then table.insert(out, { name = me, class = cls }) end
+        local party = GetNumPartyMembers and GetNumPartyMembers() or 0
+        for i = 1, party do
+            local _, c = UnitClass("party" .. i)
+            local n = UnitName("party" .. i)
+            if n then table.insert(out, { name = n, class = c }) end
+        end
+    end
+    return out
+end
+
 --- The event id out of a full link or a bare id.
 function RB.Reference(text)
     if not text then return nil end
@@ -232,6 +259,29 @@ SlashCmdList["RAIDRESBRIDGE"] = function(msg)
          chat-only forms are for macros and for anyone who prefers typing. ]]
     if cmd == "" or cmd == "gui" or cmd == "show" or cmd == "list" then
         RB.ToggleGui()
+        return
+    end
+
+    --[[ What the DLL is doing right now. The first thing to look at when
+         the game feels slow with RaidResHttp.dll loaded: a request should
+         never be talking for longer than its 30-second deadline. ]]
+    if cmd == "debug" then
+        if RaidResHttpStatus then
+            local talking, queued, uncollected, oldest = RaidResHttpStatus()
+            say(string.format("RaidResHttp.dll: %d talking, %d waiting their turn, " ..
+                "%d not yet collected; oldest %.0fs.", talking, queued, uncollected, oldest))
+            if oldest > 45 then
+                say("|cffff5179a request has outlived its deadline|r -- please report this.")
+            end
+        elseif RaidResHttpGet then
+            say("RaidResHttp.dll is an older build without RaidResHttpStatus; update it.")
+        else
+            say("RaidResHttp.dll isn't loaded.")
+        end
+        if RB.HttpWaiting then
+            local n, age = RB.HttpWaiting()
+            say(string.format("The addon is waiting on %d request(s); oldest %.0fs.", n, age))
+        end
         return
     end
 

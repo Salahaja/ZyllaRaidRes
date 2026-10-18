@@ -67,6 +67,8 @@ local function freshWorld()
     RaidResBridge = nil
     RaidResBridge_Manual = nil
     dofile(ROOT .. "RaidResBridge.lua")
+    RaidResBridge_Names = nil
+    dofile(ROOT .. "Names.lua")
     dofile(ROOT .. "Manual.lua")
     dofile(ROOT .. "Gui.lua")
     return RaidResBridge
@@ -460,6 +462,91 @@ SAID = {}
 RB.ClickItem(row2)
 check("the second is refused at the limit", table.getn(RB.WhoHas(19803)), 0)
 check("and says why", heard("already has"), true)
+
+----------------------------------------------------------------------
+-- matching raidres names to the raid
+----------------------------------------------------------------------
+RB = freshWorld()
+check("the same name scores 1", RB.NameScore("Aldwyn", "aldwyn"), 1)
+check("an accent doesn't make another person", RB.NameScore("J\195\182runn", "Jorunn"), 1)
+check("neither does a capital accented letter", RB.FoldName("\195\137lowen"), "elowen")
+check("one letter off is close", RB.NameScore("Corvane", "Corvanne") >= 0.75, true)
+check("strangers are not", RB.NameScore("Tester", "Hestia") < RB.NameGuess, true)
+check("an empty name never matches", RB.NameScore("", "Zed"), 0)
+
+local m, g = RB.MatchNames({ "Corvane", "Ivor", "Aldwyn", "Gone" },
+                           { "Corvanne", "Ivo", "Ivar", "Aldwyn", "Zed" })
+check("a clear typo is matched", m.corvane and m.corvane.name, "Corvanne")
+check("automatically", m.corvane and m.corvane.how, "auto")
+check("someone on both sides is left alone", m.aldwyn, nil)
+check("two equally close names aren't guessed between", m.ivor, nil)
+check("but one is offered", g.ivor and (g.ivor.name == "Ivo" or g.ivor.name == "Ivar"), true)
+check("nobody alike stays unmatched", m.gone == nil and g.gone == nil, true)
+
+m = RB.MatchNames({ "J\195\182runn" }, { "Jorunn" })
+check("accented signups match", m["j\195\182runn"] and m["j\195\182runn"].name, "Jorunn")
+
+m = RB.MatchNames({ "Dagny", "Dagnyy" }, { "Dagnyx" })
+check("a member equally close to two signups is matched to neither", (m.dagny and 1 or 0) + (m.dagnyy and 1 or 0), 0)
+m, g = RB.MatchNames({ "Brisa" }, { "Brosy" })
+check("fairly alike is only a guess", m.brisa, nil)
+check("but it is offered", g.brisa and g.brisa.name, "Brosy")
+
+RB.SetMatch("Ivor", "Ivar")
+m = RB.MatchNames({ "Ivor" }, { "Ivo", "Ivar" })
+check("the leader's pick wins", m.ivor and m.ivor.name, "Ivar")
+check("and says so", m.ivor and m.ivor.how, "manual")
+m = RB.MatchNames({ "Ivor", "Ivo2" }, { "Ivar", "Ivo" })
+check("a picked member isn't given to anyone else", m.ivo2 == nil or m.ivo2.name ~= "Ivar", true)
+RB.SetMatch("Ivor", "Nobodyhome")
+m = RB.MatchNames({ "Ivor" }, { "Ivo" })
+check("a pick for someone who isn't here falls back to matching", m.ivor and m.ivor.name, "Ivo")
+RB.SetMatch("Corvane", false)
+m, g = RB.MatchNames({ "Corvane" }, { "Corvanne" })
+check("'nobody here' stops it being matched", m.corvane, nil)
+check("or guessed", g.corvane, nil)
+
+-- The list as RollFor and the window see it: renamed.
+RB = freshWorld()
+local fx = io.open(ROOT .. "tools/fixtures/RaidResBridge_data.lua")
+FILES["RaidResBridge_data.lua"] = fx:read("*a")
+fx:close()
+GetNumRaidMembers = function() return 2 end
+GetRaidRosterInfo = function(i)
+  if i == 1 then return "Corvanne", 0, 1, 60, "Warlock", "WARLOCK" end
+  return "Tester", 0, 1, 60, "Warrior", "WARRIOR"
+end
+local function entry(data, name)
+  for _, p in ipairs(data.softreserves) do if p.name == name then return p end end
+end
+local merged = RB.Merged()
+check("the signup goes by their in-game name", entry(merged, "Corvanne") ~= nil, true)
+check("not their raidres one", entry(merged, "Corvane"), nil)
+check("with their reserves", table.getn(entry(merged, "Corvanne").items), 2)
+local data = RB.Read()
+check("the fetched list itself is untouched", entry(data, "Corvane") ~= nil, true)
+RB.AddManual("Corvanne", 19019, 5)
+merged = RB.Merged()
+check("a typed reserve joins the same person", table.getn(entry(merged, "Corvanne").items), 3)
+local sent
+RollFor = { key_bindings = { import = function(d) sent = d end } }
+RB.Apply(true)
+check("RollFor gets the in-game name", sent and entry(sent, "Corvanne") ~= nil, true)
+-- Without the file API the list lives in memory, read back as the same
+-- table every time; renaming it in place would outlast the match.
+WriteCustomFile, ReadCustomFile = nil, nil
+RB.fetched = { data = data, ref = "DEMO42", unsaved = true }
+check("matched while they're here", entry(RB.Merged(), "Corvanne") ~= nil, true)
+local roster2 = GetNumRaidMembers
+GetNumRaidMembers = function() return 0 end
+check("and back to the raidres name once they're not", entry(RB.Merged(), "Corvane") ~= nil, true)
+GetNumRaidMembers = roster2
+local players = RB.Players()
+local seen = 0
+for _, pl in ipairs(players) do
+  if pl.name == "Corvanne" or pl.name == "Corvane" then seen = seen + 1 end
+end
+check("and the window lists them once", seen, 1)
 
 print(string.format("\n%d checks, %d failed\n", checks, failures))
 if failures > 0 then os.exit(1) end

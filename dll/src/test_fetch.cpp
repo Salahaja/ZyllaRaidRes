@@ -24,7 +24,7 @@ static Request wait(int id) {
 
 // test_fetch.exe [event-ref]   -- with a ref, also fetches that real event.
 int main(int argc, char **argv) {
-    InitializeCriticalSection(&g_lock);
+    InitRequests();
     const std::string ref = argc > 1 ? argv[1] : "";
     std::string why;
 

@@ -368,6 +368,16 @@ function RB.HttpBusy()
     return table.getn(jobs) > 0
 end
 
+--- How many requests this addon is waiting on, and the oldest one's age.
+function RB.HttpWaiting()
+    local oldest = 0
+    for _, job in ipairs(jobs) do
+        local age = GetTime() - job.started
+        if age > oldest then oldest = age end
+    end
+    return table.getn(jobs), oldest
+end
+
 --[[ Fetch a list and import it: the event, then the raid it is for.
 
      Two requests because raidres numbers its items its own way and keeps the
