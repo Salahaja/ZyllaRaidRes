@@ -540,11 +540,19 @@ lockTick:SetScript("OnUpdate", function()
     this.t = (this.t or 0) + arg1
     if this.t < LOCK_POLL then return end
     this.t = 0
+    if not RB.lockPending and not RB.reservePending then this:Hide() return end
     RB.CheckLockResult()
+    RB.CheckReserveResult()
 end)
 
+-- One command file, so one command at a time: a lock and a reserve sent
+-- together would have the second overwrite the first.
+function RB.HelperBusy()
+    return (RB.lockPending or RB.reservePending) and true or false
+end
+
 function RB.SendLockCommand(ref, lock)
-    if not RB.LockControlReady() then return false end
+    if not RB.LockControlReady() or RB.HelperBusy() then return false end
     pcall(WriteCustomFile, LOCK_RESULT, "", "w")
     local cmd = (lock and "lock " or "unlock ") .. ref
     local ok = pcall(WriteCustomFile, LOCK_CMD, cmd, "w")
@@ -561,7 +569,7 @@ function RB.SendOpenCommand(ref)
 end
 
 function RB.SendSigninCommand(ref)
-    if not RB.FileAPI() then return false end
+    if not RB.FileAPI() or RB.HelperBusy() then return false end
     pcall(WriteCustomFile, LOCK_RESULT, "", "w")
     local ok = pcall(WriteCustomFile, LOCK_CMD, "signin " .. ref, "w")
     if not ok then return false end
@@ -570,8 +578,56 @@ function RB.SendSigninCommand(ref)
     return true
 end
 
+-- ---------------------------------------------------------------------------
+-- Your own reserves on raidres, through the same helper
+--
+--   reserve REF ITEMID NAME CLASS [SPEC]   ->  ok reserved [SPEC] | needspec
+--   unreserve REF ITEMID NAME              ->  ok removed
+--   either                                 ->  signin [expiry] | error: why
+--
+-- ITEMID is the WoW item id; the helper finds raidres's own. NAME is who you
+-- signed up as, CLASS raidres's word for your class ("Paladin"). Longer to
+-- answer than a lock: the helper reads the list, its loot table and who you
+-- are before it sends anything.
+-- ---------------------------------------------------------------------------
+
+local RESERVE_TIMEOUT = 45
+
+function RB.SendReserveCommand(ref, itemId, name, class, spec, remove)
+    if not RB.LockControlReady() or RB.HelperBusy() then return false end
+    local cmd
+    if remove then
+        cmd = "unreserve " .. ref .. " " .. itemId .. " " .. name
+    else
+        cmd = "reserve " .. ref .. " " .. itemId .. " " .. name .. " " .. class ..
+            (spec and (" " .. spec) or "")
+    end
+    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
+    if not pcall(WriteCustomFile, LOCK_CMD, cmd, "w") then return false end
+    RB.reservePending = { ref = ref, item = itemId, name = name, class = class,
+                          remove = remove, sent = GetTime() }
+    lockTick:Show()
+    return true
+end
+
+function RB.CheckReserveResult()
+    local pending = RB.reservePending
+    if not pending then return end
+    if GetTime() - pending.sent > RESERVE_TIMEOUT then
+        RB.reservePending = nil
+        if RB.Notice then RB.Notice("the lock script did not answer. Is it running?") end
+        if RB.Draw then RB.Draw() end
+        return
+    end
+    local ok, text = pcall(ReadCustomFile, LOCK_RESULT)
+    if not ok or type(text) ~= "string" or text == "" then return end
+    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
+    RB.reservePending = nil
+    if RB.OnReserveResult then RB.OnReserveResult(pending, text) end
+end
+
 function RB.CheckLockResult()
-    if not RB.lockPending then lockTick:Hide() return end
+    if not RB.lockPending then return end
     local pending = RB.lockPending
     if GetTime() - pending.sent > LOCK_TIMEOUT then
         RB.lockPending = nil

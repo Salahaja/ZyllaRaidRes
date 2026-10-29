@@ -548,11 +548,166 @@ local function linkInChat(id)
     end
 end
 
+-- ---------------------------------------------------------------------------
+-- Your own reserves, on raidres itself
+--
+-- Everyone else's reserves are typed here, because only they can sign in to
+-- raidres as themselves. Yours needn't be: with the lock helper running
+-- (RaidResLock.dll), the signed-in Chrome makes them on raidres, the way the
+-- site's own form does, and the list is fetched again to show them.
+-- ---------------------------------------------------------------------------
+
+-- raidres's specializations per class, as its reservation form offers them.
+local SPECS = {
+    DRUID   = { "DruidBalance", "DruidFeral", "DruidRestoration", "DruidBear" },
+    HUNTER  = { "HunterBeastMastery", "HunterMarksmanship", "HunterSurvival" },
+    MAGE    = { "MageArcane", "MageFire", "MageFrost" },
+    PALADIN = { "PaladinHoly", "PaladinProtection", "PaladinRetribution" },
+    PRIEST  = { "PriestDiscipline", "PriestHoly", "PriestShadow" },
+    ROGUE   = { "RogueSwords", "RogueDaggers", "RogueMaces" },
+    SHAMAN  = { "ShamanElemental", "ShamanEnhancement", "ShamanRestoration", "ShamanTank" },
+    WARLOCK = { "WarlockAffliction", "WarlockDemonology", "WarlockDestruction" },
+    WARRIOR = { "WarriorArms", "WarriorFury", "WarriorProtection" },
+}
+
+-- "PALADIN" -> "Paladin", the way raidres names a class.
+local function raidresClass(token)
+    return string.upper(string.sub(token, 1, 1)) .. string.lower(string.sub(token, 2))
+end
+
+-- "HunterBeastMastery" -> "Beast Mastery", for the menu.
+local function specLabel(spec, token)
+    local rest = string.sub(spec, string.len(token) + 1)
+    return (string.gsub(rest, "(%l)(%u)", "%1 %2"))
+end
+
+--[[ The name you are on the list as: whoever Names.lua matched you to, or
+     your own. nil for anyone else, so "is this me?" is one call. ]]
+function RB.MySignup(s, name)
+    local me = UnitName and UnitName("player")
+    if not me then return nil end
+    local m = s and s.matchedBy[key(me)]
+    local signup = (m and m.signup) or me
+    if name and key(name) ~= key(me) and key(name) ~= key(signup) then return nil end
+    return signup
+end
+
+--- Does a click on loot for `name` go to raidres? Only for you, on a raidres list.
+function RB.ReservesOnRaidres(s, name)
+    return s and s.ref and s.ref ~= "manual" and RB.MySignup(s, name) ~= nil
+        and RB.LockControlReady and RB.LockControlReady() and true or false
+end
+
+--[[ Reserve an item on raidres as yourself, or take it back. The obvious
+     refusals are made here, where they can be said at once; raidres has the
+     last word on the rest, and the helper brings back what it said. ]]
+function RB.ReserveOnRaidres(id, remove, spec)
+    local f = RB.gui
+    local s = f and f.snap
+    if not s then return end
+    -- the command names you as raidres knows you; the list, as the game does
+    local me = RB.MySignup(s)
+    local k = key(UnitName("player"))
+    if RB.HelperBusy() then
+        RB.Notice("still waiting on raidres for the last one.")
+        return
+    end
+    if RB.sessionExpired then
+        RB.Notice("your raidres session expired: click Sign in at the top first.")
+        return
+    end
+    if s.locked then
+        RB.Notice("the list is locked on raidres. Unlock it to change reserves.")
+        return
+    end
+    local _, token = UnitClass("player")
+    local name = RB.ItemInfo(id)
+    if not remove then
+        local held = 0
+        for _ in pairs(s.web[k] or {}) do held = held + 1 end
+        if held >= RB.Limit() then
+            RB.Notice("you have " .. held .. " of " .. RB.Limit() ..
+                " on raidres. Take one back first.")
+            return
+        end
+        if s.hard[id] then
+            RB.Notice("that item is hard-reserved, so nobody can soft-reserve it.")
+            return
+        end
+    end
+    spec = spec or (RaidResBridge_Spec and RaidResBridge_Spec[k])
+    if not RB.SendReserveCommand(s.ref, id, me, raidresClass(token or "WARRIOR"), spec, remove) then
+        RB.Notice("can't reach the lock script. Is Nampower loaded?")
+        return
+    end
+    RB.Notice((remove and "taking back " or "reserving ") .. name .. " on raidres...")
+    RB.Draw()
+end
+
+local function onPickSpec()
+    if CloseDropDownMenus then CloseDropDownMenus() end
+    local ask = RB.askSpec
+    if not ask or not this.value then return end
+    RB.askSpec = nil
+    RaidResBridge_Spec = RaidResBridge_Spec or {}
+    RaidResBridge_Spec[key(ask.name)] = this.value
+    RB.ReserveOnRaidres(ask.item, false, this.value)
+end
+
+--[[ raidres needs a specialization for a first reserve, and has none for
+     you yet: the class's own list, once. The pick is kept, and raidres keeps
+     it too once you are signed up. ]]
+function RB.InitSpecMenu()
+    local ask = RB.askSpec
+    local _, token = UnitClass("player")
+    local list = SPECS[token or ""]
+    if not ask or not list then return end
+    local info = {}
+    info.text = "Your " .. string.lower(raidresClass(token)) .. " spec on raidres"
+    info.isTitle = 1
+    UIDropDownMenu_AddButton(info)
+    for i = 1, table.getn(list) do
+        info = {}
+        info.text = specLabel(list[i], raidresClass(token))
+        info.value = list[i]
+        info.func = onPickSpec
+        UIDropDownMenu_AddButton(info)
+    end
+end
+
+--- What the helper answered, for a reserve or unreserve.
+function RB.OnReserveResult(pending, text)
+    local name = RB.ItemInfo(pending.item)
+    if string.sub(text, 1, 12) == "ok reserved " then
+        RaidResBridge_Spec = RaidResBridge_Spec or {}
+        RaidResBridge_Spec[key(pending.name)] = string.sub(text, 13)
+    end
+    if string.sub(text, 1, 3) == "ok " then
+        RB.sessionExpired = nil
+        RB.Notice((pending.remove and "took back " or "reserved ") .. name ..
+            " on raidres. Fetching the list again...")
+        RB.Request(pending.ref)
+    elseif text == "needspec" then
+        RB.askSpec = { item = pending.item, name = pending.name }
+        local f = RB.gui
+        if f and f.specMenu then ToggleDropDownMenu(1, nil, f.specMenu, "cursor") end
+        RB.Notice("pick your spec: raidres needs it for your first reserve.")
+    elseif string.sub(text, 1, 6) == "signin" then
+        RB.sessionExpired = true
+        RB.Notice("raidres session expired. Click Sign in.")
+    else
+        RB.Notice((string.gsub(text, "^error: ", "raidres: ")))
+    end
+    RB.DrawStatus()
+    RB.Draw()
+end
+
 --[[ Clicking an item gives it to whoever is selected, or takes it back.
 
-     Only ever the typed list: an item somebody reserved on raidres is theirs,
-     and only raidres can change it. Shift-click links the item in chat and
-     ctrl-click tries it on, as everywhere else in the game. ]]
+     For anyone else, only ever the typed list: an item somebody reserved on
+     raidres is theirs, and only raidres can change it. For you, with the
+     lock helper running, it is raidres itself (above). Shift-click links the
+     item in chat and ctrl-click tries it on, as everywhere else in the game. ]]
 function RB.ClickItem(data)
     if not data or not data.item then return end
     local id = data.item.g
@@ -580,6 +735,10 @@ function RB.ClickItem(data)
 
     local s = RB.Snapshot()
     local k = key(who)
+    if RB.ReservesOnRaidres(s, who) then
+        RB.ReserveOnRaidres(id, (s.web[k] and s.web[k][id]) and true or false)
+        return
+    end
     if s.web[k] and s.web[k][id] then
         RB.Notice(who .. " reserved that on raidres; change it there.")
         return
@@ -696,13 +855,26 @@ function RB.ItemTooltip(owner, id)
             for _, it in ipairs(s.items[k] or {}) do
                 if it.id == id then mine = true end
             end
+            local onRaidres = RB.ReservesOnRaidres(s, who)
+            local held = table.getn(s.items[k] or {})
+            if onRaidres then
+                held = 0
+                for _ in pairs(s.web[k] or {}) do held = held + 1 end
+            end
             if mine and s.web[k] and s.web[k][id] then
-                addGrey(who .. " reserved this on raidres.")
+                if onRaidres then
+                    GameTooltip:AddLine("Click: take it back on raidres", 0.13, 1, 0.13)
+                else
+                    addGrey(who .. " reserved this on raidres.")
+                end
             elseif mine then
                 GameTooltip:AddLine("Click: take it back from " .. who, 0.13, 1, 0.13)
             elseif not s.hard[id] then
-                if table.getn(s.items[k] or {}) >= RB.Limit() then
+                if held >= RB.Limit() then
                     GameTooltip:AddLine(who .. " is full.", 1, 0.82, 0)
+                elseif onRaidres then
+                    GameTooltip:AddLine("Click: reserve it on raidres as " .. RB.MySignup(s),
+                        0.13, 1, 0.13)
                 else
                     GameTooltip:AddLine("Click: reserve for " .. who, 0.13, 1, 0.13)
                 end
@@ -961,6 +1133,10 @@ local function buildPlayers(f)
     f.matchMenu = CreateFrame("Frame", "ZyllaRaidResMatchMenu", f, "UIDropDownMenuTemplate")
     f.matchMenu:Hide()
     UIDropDownMenu_Initialize(f.matchMenu, RB.InitMatchMenu, "MENU")
+    -- the spec raidres wants for your first reserve, when it has none
+    f.specMenu = CreateFrame("Frame", "ZyllaRaidResSpecMenu", f, "UIDropDownMenuTemplate")
+    f.specMenu:Hide()
+    UIDropDownMenu_Initialize(f.specMenu, RB.InitSpecMenu, "MENU")
 
     f.dRows = {}
     for i = 1, D_ROWS do
@@ -980,11 +1156,20 @@ local function buildPlayers(f)
         row.remove:SetPoint("RIGHT", row, "RIGHT", 3, 0)
         row.remove:SetScript("OnClick", function()
             local r = this:GetParent()
-            if r.itemId and RB.player and RB.RemoveManual(RB.player, r.itemId) then
+            if not r.itemId or not RB.player then return end
+            if r.onRaidres then
+                RB.ReserveOnRaidres(r.itemId, true)
+            elseif RB.RemoveManual(RB.player, r.itemId) then
                 RB.Commit()
             end
         end)
-        tip(row.remove, "Take it back", "Remove this reserve. It was typed here, so it can go.")
+        tip(row.remove, "Take it back", "")
+        -- yours on raidres: where it lives, beside the X that takes it back there
+        row.mine = text(row, "GameFontDisableSmall", "RIGHT")
+        row.mine:SetPoint("RIGHT", row.remove, "LEFT", 2, 0)
+        row.mine:SetWidth(44)
+        row.mine:SetHeight(ROW_H)
+        row.mine:SetText("raidres")
         row:SetScript("OnClick", function()
             if this.itemId and IsShiftKeyDown and IsShiftKeyDown() then linkInChat(this.itemId) end
         end)
@@ -1578,7 +1763,8 @@ function RB.LockClick()
     local ref = s and s.ref
 
     if RB.LockControlReady and RB.LockControlReady() and ref and ref ~= "manual" then
-        if RB.lockPending then
+        -- a reserve in flight too: they share the helper's one command file
+        if RB.HelperBusy() then
             RB.Notice("already sending...")
             return
         end
@@ -1864,10 +2050,22 @@ function RB.DrawHint()
     local line
     if f.notice and GetTime() < (f.noticeUntil or 0) then
         line = hex(WHITE, f.notice)
+    elseif RB.reservePending then
+        line = hex(GOLD, "Waiting on raidres...")
     elseif not RB.player then
         line = "Pick a player, then click loot to reserve it for them."
     elseif s and s.inRaid and s.absent[key(RB.player)] and next(s.free) ~= nil then
         line = RB.player .. " isn't in your raid. If they're here under another name, press Match."
+    elseif RB.ReservesOnRaidres(s, RB.player) then
+        local held = 0
+        for _ in pairs(s.web[key(RB.player)] or {}) do held = held + 1 end
+        local limit = RB.Limit()
+        if held >= limit then
+            line = "You're full on raidres. Click one of yours to take it back there."
+        else
+            line = "Click loot to reserve it on raidres as " .. RB.MySignup(s) ..
+                " (" .. (limit - held) .. " left)."
+        end
     else
         local n = table.getn(s and s.items[key(RB.player)] or {})
         local limit = RB.Limit()
@@ -1969,6 +2167,8 @@ local function drawDetail(f, s, sel)
     end
 
     local web = s.web[k] or {}
+    -- yours, with the lock helper: raidres's rows can be taken back from here
+    local onRaidres = RB.ReservesOnRaidres(s, RB.player)
     local shown = n
     if n > D_ROWS then shown = D_ROWS - 1 end
     for i = 1, shown do
@@ -1979,21 +2179,31 @@ local function drawDetail(f, s, sel)
         row.icon:SetTexture(icon or QMARK)
         row.icon:Show()
         row.text:SetText(hex(qualityHex(q), name))
-        if web[it.id] then
+        row.onRaidres = (web[it.id] and onRaidres) and true or nil
+        if row.onRaidres then
+            row.tag:Hide()
+            row.mine:Show()
+            row.remove:Show()
+            row.remove.tipBody = "Take it back on raidres. The list is fetched again after."
+        elseif web[it.id] then
             row.tag:Show()
+            row.mine:Hide()
             row.remove:Hide()
         else
             row.tag:Hide()
+            row.mine:Hide()
             row.remove:Show()
+            row.remove.tipBody = "Remove this reserve. It was typed here, so it can go."
         end
         row:Show()
     end
     if n > D_ROWS then
         local row = f.dRows[D_ROWS]
-        row.itemId = nil
+        row.itemId, row.onRaidres = nil, nil
         row.icon:Hide()
         row.text:SetText(hex(GREY, "+" .. (n - shown) .. " more (hover their name)"))
         row.tag:Hide()
+        row.mine:Hide()
         row.remove:Hide()
         row:Show()
     end

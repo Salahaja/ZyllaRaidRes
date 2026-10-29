@@ -274,6 +274,7 @@ local function world(withoutNames)
     RaidResHttpGet, RaidResHttpResult = nil, nil
     RaidResBridge, RaidResBridge_Manual, RaidResBridge_Limit = nil, nil, nil
     RaidResBridge_Sent, RaidResBridge_Options, RaidResBridge_Recent = nil, nil, nil
+    RaidResBridge_Spec, RaidResLockReady, RaidResBridge_LockControl = nil, nil, nil
     RaidResBridge_Data, RaidResBridge_Ref, RaidResBridge_Locked = nil, nil, nil
 
     dofile(DIR .. "expected.lua")
@@ -1304,6 +1305,102 @@ FILES["RaidResBridge_data.lua"] = string.gsub(slurp(DIR .. "RaidResBridge_data.l
 RB.Request("NEW777")
 run(3)
 check("a list the watcher fetched joins them", RaidResBridge_Recent[1].ref, "NEW777")
+
+-- ================================================================== your own, on raidres
+print("your own reserves, on raidres")
+RB = world()
+RaidResLockReady = function() return 1 end     -- RaidResLock.dll is loaded
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+local CMD, RESULT = "RaidResBridge_lock_cmd.txt", "RaidResBridge_lock_result.txt"
+click(findRow(f.pRows, "Tester"))
+check("you are picked", RB.player, "Tester")
+check("the hint says your loot goes to raidres",
+    string.find(hint(f), "reserve it on raidres as Tester (2 left)", 1, true) ~= nil, true)
+local mineRow = firstItemRow(f)
+local mineId = mineRow.data.item.g
+enter(mineRow)
+check("and so does the tooltip", tipHas("Click: reserve it on raidres as Tester"), true)
+FILES[CMD] = nil
+click(mineRow)
+check("a locked list is refused at once", string.find(hint(f), "locked on raidres", 1, true) ~= nil, true)
+check("and nothing goes to raidres", FILES[CMD], nil)
+
+RB.SetLock("DEMO42", false)
+NOW = NOW + 5
+RB.Refresh()
+click(firstItemRow(f))
+check("unlocked, the click goes to raidres", FILES[CMD], "reserve DEMO42 " .. mineId .. " Tester Warrior")
+check("not as a typed reserve", RaidResBridge_Manual.tester, nil)
+check("and the window says so", string.find(hint(f), "on raidres...", 1, true) ~= nil, true)
+FILES[CMD] = nil
+click(firstItemRow(f))
+check("a second click waits for the first", string.find(hint(f), "still waiting on raidres", 1, true) ~= nil, true)
+check("sending nothing over it", FILES[CMD], nil)
+run(4.5)
+check("while it waits the hint says so", hint(f), "Waiting on raidres...")
+
+print("raidres wants your spec")
+FILES[RESULT] = "needspec"
+run(1)
+check("the class's own specs open", f.specMenu.ddOpen, true)
+check("as words, not raidres's ids", MENU[3] and MENU[3].text, "Fury")
+pick(MENU[3])
+check("the pick goes along", FILES[CMD], "reserve DEMO42 " .. mineId .. " Tester Warrior WarriorFury")
+check("and is kept for next time", RaidResBridge_Spec and RaidResBridge_Spec.tester, "WarriorFury")
+
+FILES["RaidResBridge_request.txt"] = nil
+FILES[RESULT] = "ok reserved WarriorFury"
+run(1)
+check("done: the list is fetched again", FILES["RaidResBridge_request.txt"], "DEMO42")
+check("and the window says what happened", string.find(hint(f), "reserved ", 1, true) == 1, true)
+
+print("taking yours back on raidres")
+loadstring(slurp(DIR .. "RaidResBridge_data.lua"))()
+local withMine = RaidResBridge_Data
+table.insert(withMine.softreserves, { name = "Tester", role = "", items = { { id = mineId, quality = 4 } } })
+RB.fetched = { unsaved = true, ref = "DEMO42", data = withMine }
+RB.waiting = nil
+RB.Refresh()
+check("yours on raidres say where they live", f.dRows[1].mine:IsShown(), true)
+check("beside an X that takes them back there", f.dRows[1].remove:IsShown(), true)
+check("not the plain raidres tag", f.dRows[1].tag:IsShown(), false)
+enter(itemRow(f, mineId))
+check("the loot tooltip offers the same", tipHas("Click: take it back on raidres"), true)
+click(f.dRows[1].remove)
+check("the X sends it", FILES[CMD], "unreserve DEMO42 " .. mineId .. " Tester")
+FILES[RESULT] = "error: Tester hasn't reserved that on raidres"
+run(1)
+check("raidres's refusal comes back in its words", hint(f), "raidres: Tester hasn't reserved that on raidres")
+click(itemRow(f, mineId))
+check("clicking the loot itself takes it back too", FILES[CMD], "unreserve DEMO42 " .. mineId .. " Tester")
+FILES[RESULT] = "signin"
+run(1)
+check("a lapsed sign-in says so", string.find(hint(f), "session expired", 1, true) ~= nil, true)
+click(itemRow(f, mineId))
+check("and nothing is sent until you sign in", string.find(hint(f), "click Sign in", 1, true) ~= nil, true)
+RB.sessionExpired = nil
+FILES[CMD] = nil
+click(itemRow(f, mineId))
+run(46)
+check("a helper that never answers is given up on", string.find(hint(f), "did not answer", 1, true) ~= nil, true)
+run(5)
+check("and the window stops waiting", RB.reservePending == nil and hint(f) ~= "Waiting on raidres...", true)
+
+print("everyone else's, and without the helper")
+local other = findRow(f.pRows, "Newbie")
+click(other)
+FILES[CMD] = nil
+click(firstItemRow(f))
+check("someone else's still go in as typed", RaidResBridge_Manual.newbie ~= nil, true)
+check("not to raidres", FILES[CMD], nil)
+RB = world()
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+click(findRow(f.pRows, "Tester"))
+click(firstItemRow(f))
+check("without the lock helper, yours are typed too", RaidResBridge_Manual.tester ~= nil, true)
+check("and the hint doesn't promise raidres", string.find(hint(f), "on raidres", 1, true), nil)
 
 -- ================================================================== the minimap button
 print("the minimap button")

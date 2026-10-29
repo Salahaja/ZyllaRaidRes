@@ -19,6 +19,11 @@ Usage
   python raidres_lock.py unlock REF    unlock event REF and exit
   python raidres_lock.py open   REF    open event REF in Chrome and exit
   python raidres_lock.py status         check Chrome and the raidres tab
+  python raidres_lock.py reserve   REF ITEMID NAME CLASS [SPEC] [--dry-run]
+  python raidres_lock.py unreserve REF ITEMID NAME [--dry-run]
+                                        your own soft reserve on event REF,
+                                        by WoW item id; --dry-run looks
+                                        everything up and sends nothing
 """
 
 import http.client, json, os, socket, struct, sys, time, re
@@ -406,6 +411,186 @@ def lock_unlock(ref, locked):
     finally:
         ws.close()
 
+# ---------------------------------------------------------------------------
+# Reserve / unreserve your own items
+#
+# The same requests raidres's own reservation form makes, run inside the page
+# like lock and unlock, so Chrome's own sign-in is used and never seen here:
+#   POST   /api/raid-event-reservations       {reference, characterName,
+#          characterClass, specialization, isTemporary, raidItemIds, comment}
+#   DELETE /api/raid-event-reservations/<id>  one reserved item
+# The game knows WoW item ids; raidres's own ids come from the raid's public
+# loot file, /raids/raid_<raidId>.json (gameDbItemId -> id).
+# ---------------------------------------------------------------------------
+
+# raidres's classes and their specializations, as its reservation form has them.
+SPECS = {
+    "Druid":   ["DruidBalance", "DruidFeral", "DruidRestoration", "DruidBear"],
+    "Hunter":  ["HunterBeastMastery", "HunterMarksmanship", "HunterSurvival"],
+    "Mage":    ["MageArcane", "MageFire", "MageFrost"],
+    "Paladin": ["PaladinHoly", "PaladinProtection", "PaladinRetribution"],
+    "Priest":  ["PriestDiscipline", "PriestHoly", "PriestShadow"],
+    "Rogue":   ["RogueSwords", "RogueDaggers", "RogueMaces"],
+    "Shaman":  ["ShamanElemental", "ShamanEnhancement", "ShamanRestoration", "ShamanTank"],
+    "Warlock": ["WarlockAffliction", "WarlockDemonology", "WarlockDestruction"],
+    "Warrior": ["WarriorArms", "WarriorFury", "WarriorProtection"],
+}
+
+# A character name as the game writes it: letters, accented ones included.
+_NAME_RE = re.compile(r"^[^\W\d_]{2,24}$")
+
+# Answers one JSON object: {result: ok|needspec|signin|plan|error, ...}.
+_RESERVE_JS = r"""
+async (a) => {
+  const answer = (o) => JSON.stringify(o);
+  // raidres's own error text, read the way its errorMessageParser reads it
+  const said = (d) => {
+    if (typeof d === 'string') return d;
+    if (Array.isArray(d)) return d.filter(x => typeof x === 'string').join(', ');
+    if (d && typeof d === 'object') return d.message || d.error || '';
+    return '';
+  };
+  const get = async (url) => {
+    const r = await fetch(url, { credentials: 'include' });
+    let body = null;
+    try { body = await r.json(); } catch (e) {}
+    return { status: r.status, ok: r.ok, body };
+  };
+  const send = async (url, method, body) => {
+    const r = await fetch(url, { method, credentials: 'include',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    let reply = null;
+    try { reply = await r.json(); } catch (e) {}
+    if (r.ok) return null;
+    if (r.status === 401) return answer({ result: 'signin' });
+    return answer({ result: 'error', message: said(reply) || ('raidres said HTTP ' + r.status) });
+  };
+
+  const me = await get('/api/auth/me');
+  const who = me.body && (me.body.id != null ? me.body.id : (me.body.user && me.body.user.id));
+  if (!me.ok || who == null) return answer({ result: 'signin' });
+
+  const ev = await get('/api/events/' + encodeURIComponent(a.ref));
+  if (!ev.ok || !ev.body) return answer({ result: 'error', message: 'raidres has no list ' + a.ref });
+  const e = ev.body;
+  if (e.locked) return answer({ result: 'error', message: 'the list is locked on raidres' });
+  if (e.archived) return answer({ result: 'error', message: 'the list is archived on raidres' });
+
+  const raid = await get('/raids/raid_' + e.raidId + '.json');
+  if (!raid.ok || !raid.body) return answer({ result: 'error', message: "couldn't load the list's loot table" });
+  const ids = (raid.body.raidItems || []).filter(i => i.gameDbItemId === a.item).map(i => i.id);
+  if (ids.length === 0) return answer({ result: 'error', message: "that item isn't in this raid's loot on raidres" });
+
+  const name = a.name.toLocaleLowerCase();
+  const mine = (e.reservations || []).filter(r => r.user && String(r.user.id) === String(who)
+    && r.character && String(r.character.name).toLocaleLowerCase() === name);
+  const held = mine.filter(r => r.raidItemId !== null);
+
+  if (a.remove) {
+    const row = held.filter(r => ids.includes(r.raidItemId)).pop();
+    if (!row) return answer({ result: 'error', message: a.name + " hasn't reserved that on raidres" });
+    if (a.dry) return answer({ result: 'plan', method: 'DELETE', id: row.id });
+    return (await send('/api/raid-event-reservations/' + row.id, 'DELETE', row.id))
+      || answer({ result: 'ok', done: 'removed' });
+  }
+
+  if (!e.allowDuplicateReservation && held.some(r => ids.includes(r.raidItemId)))
+    return answer({ result: 'error', message: a.name + ' already has that reserved' });
+  if (e.reservationLimit && held.length >= e.reservationLimit)
+    return answer({ result: 'error', message: a.name + ' already has ' + held.length + ' of '
+      + e.reservationLimit + ' reserved' });
+  const signedUp = mine.find(r => r.character.class);
+  if (signedUp && signedUp.character.class !== a.cls)
+    return answer({ result: 'error', message: a.name + ' is signed up as ' + signedUp.character.class });
+
+  // The spec: the one already signed up with, else the saved character's,
+  // else the game's pick -- and with none of those, ask the game for one.
+  let spec = (mine.find(r => r.character.specialization) || { character: {} }).character.specialization;
+  if (!spec) {
+    const chars = await get('/api/user-characters');
+    const list = Array.isArray(chars.body) ? chars.body : ((chars.body && chars.body.data) || []);
+    const saved = list.find(c => c && String(c.name).toLocaleLowerCase() === name && c.class === a.cls);
+    spec = saved && saved.specialization;
+  }
+  spec = spec || a.spec;
+  if (!spec) return answer({ result: 'needspec' });
+
+  const body = { reference: e.reference, characterName: signedUp ? signedUp.character.name : a.name,
+    characterClass: a.cls, specialization: spec, isTemporary: false, raidItemIds: [ids[0]], comment: '' };
+  if (a.dry) return answer({ result: 'plan', method: 'POST', body, me: who, held: held.length,
+    limit: e.reservationLimit });
+  return (await send('/api/raid-event-reservations', 'POST', body))
+    || answer({ result: 'ok', done: 'reserved', spec });
+}
+"""
+
+def check_reserve(ref, item, name, cls=None, spec=None, remove=False):
+    """The arguments as the game sent them, checked; raises ValueError.
+    Taking one back needs no class: the reservation already says."""
+    validate_ref(ref)
+    try:
+        item = int(item)
+    except (TypeError, ValueError):
+        raise ValueError("bad item id: %r" % item)
+    if item <= 0:
+        raise ValueError("bad item id: %r" % item)
+    if not _NAME_RE.match(name or ""):
+        raise ValueError("bad character name: %r" % name)
+    if remove:
+        return item
+    if cls not in SPECS:
+        raise ValueError("unknown class: %r" % cls)
+    if spec is not None and spec not in SPECS[cls]:
+        raise ValueError("%r is not a %s specialization" % (spec, cls))
+    return item
+
+def reserve_line(answer):
+    """The page's answer as the one line the addon reads back."""
+    result = answer.get("result")
+    if result == "ok":
+        line = "ok " + answer.get("done", "")
+        return line + (" " + answer["spec"] if answer.get("spec") else "")
+    if result in ("needspec", "signin"):
+        return result
+    if result == "plan":
+        return "plan " + json.dumps(answer)
+    return "error: " + (answer.get("message") or "raidres didn't say why")
+
+def reserve(ref, item, name, cls, spec=None, remove=False, dry=False):
+    try:
+        item = check_reserve(ref, item, name, cls, spec, remove)
+    except ValueError as e:
+        return "error: %s" % e
+    if not ensure_chrome("https://raidres.top/res/%s" % ref):
+        return "error: could not start Chrome"
+    tab = find_raidres_tab()
+    if not tab:
+        log("no raidres.top tab in Chrome -- opening one")
+        tab = open_raidres_tab()
+        if not tab or not tab.get("webSocketDebuggerUrl"):
+            return "error: could not open a raidres tab in Chrome"
+    args = {"ref": ref, "item": item, "name": name, "cls": cls, "spec": spec,
+            "remove": bool(remove), "dry": bool(dry)}
+    ws = WebSocket(tab["webSocketDebuggerUrl"])
+    try:
+        # The arguments go in as JSON: nothing the game sent can become code.
+        reply = ws.call("Runtime.evaluate", {
+            "expression": "(%s)(%s)" % (_RESERVE_JS, json.dumps(args)),
+            "awaitPromise": True,
+            "returnByValue": True,
+        }, timeout=45)
+        value = reply.get("result", {}).get("result", {}).get("value")
+        if not isinstance(value, str):
+            err = reply.get("result", {}).get("exceptionDetails", {})
+            return "error: CDP eval failed: %s" % json.dumps(err)[:200]
+        line = reserve_line(json.loads(value))
+        if line == "signin":
+            expiry = _format_expiry(_get_expiry(ws))
+            return "signin %s" % expiry if expiry else "signin"
+        return line
+    finally:
+        ws.close()
+
 def signin(ref):
     validate_ref(ref)
     login_url = "https://raidres.top/"
@@ -505,9 +690,26 @@ def watch(parent=None):
                 break
 
             if os.path.isfile(cmd_path):
-                with open(cmd_path, "r") as f:
+                # UTF-8: the game writes names with accents that way.
+                with open(cmd_path, "r", encoding="utf-8", errors="replace") as f:
                     line = f.read().strip()
                 os.remove(cmd_path)
+
+                # reserve REF ITEM NAME CLASS [SPEC]  /  unreserve REF ITEM NAME
+                words = line.split()
+                if words and words[0] in ("reserve", "unreserve"):
+                    remove = words[0] == "unreserve"
+                    if (remove and len(words) != 4) or (not remove and len(words) not in (5, 6)):
+                        result = "error: bad command"
+                    else:
+                        log("%s ..." % line)
+                        result = reserve(words[1], words[2], words[3],
+                                         None if remove else words[4],
+                                         words[5] if len(words) == 6 else None, remove=remove)
+                    log("  -> %s" % result)
+                    with open(result_path, "w", encoding="utf-8") as f:
+                        f.write(result)
+                    continue
 
                 parts = line.split(None, 1)
                 if len(parts) == 1 and parts[0] == "restart":
@@ -605,9 +807,22 @@ def main():
         print(result)
         sys.exit(0 if result.startswith("ok") else 1)
 
+    elif cmd in ("reserve", "unreserve"):
+        dry = "--dry-run" in args
+        words = [w for w in args[1:] if w != "--dry-run"]
+        remove = cmd == "unreserve"
+        if (remove and len(words) != 3) or (not remove and len(words) not in (4, 5)):
+            print("usage: raidres_lock.py reserve REF ITEMID NAME CLASS [SPEC] [--dry-run]")
+            print("       raidres_lock.py unreserve REF ITEMID NAME [--dry-run]")
+            sys.exit(1)
+        result = reserve(words[0], words[1], words[2], None if remove else words[3],
+                         words[4] if len(words) == 5 else None, remove=remove, dry=dry)
+        print(result)
+        sys.exit(0 if result.startswith(("ok", "plan")) else 1)
+
     else:
         print("unknown command: %s" % cmd)
-        print("try: watch, status, lock REF, unlock REF, open REF")
+        print("try: watch, status, lock REF, unlock REF, open REF, reserve, unreserve")
         sys.exit(1)
 
 if __name__ == "__main__":

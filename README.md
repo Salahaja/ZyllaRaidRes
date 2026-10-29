@@ -353,9 +353,10 @@ table along.
 
 ### What it won't let you do
 
-- **Remove a reservation someone made on raidres.** It's shown as theirs, and
-  deleting it here would look like it worked and come straight back on the
-  next fetch. Change it on raidres.
+- **Remove a reservation someone else made on raidres.** It's shown as theirs,
+  and deleting it here would look like it worked and come straight back on
+  the next fetch. Your own you can change from here: see
+  [Your own reserves](#your-own-reserves-on-raidres-from-in-game).
 - **Soft-reserve a hard-reserved item.**
 - **Go over the event's limit.** The limit comes from the event itself, not an
   assumption, so a list that allows one won't quietly take a second.
@@ -456,6 +457,42 @@ The setting is saved (`/rrb lockcontrol` to check, `off` to turn it back).
 Anyone without the script running gets the same read-only lock button as
 before, with no errors.
 
+## Your own reserves on raidres, from in game
+
+Everyone else's reserves are typed into the window, because only they can sign
+in to raidres as themselves. **Yours can go on raidres itself.** This uses the
+same RaidResLock.dll and signed-in Chrome as locking, so set that up first.
+
+1. Open the window and pick **yourself** in the players list. The hint says
+   *Click loot to reserve it on raidres as Salahaja (1 left)*.
+2. **Click loot** to reserve it on raidres.
+3. **Click it again**, or the X beside it in your reserves, to take it back
+   there. Your raidres rows are marked `raidres` beside that X.
+4. The list is fetched again afterwards, so the window, and RollFor, show
+   what raidres now has.
+
+It makes the same requests raidres's own reservation form makes, from inside
+the signed-in page. As with locking, the session never leaves Chrome.
+
+**Your specialization.** raidres needs a spec for your first reserve on a
+list. It uses the one you signed up with, or the one saved on your raidres
+character. Failing both, the window asks once, from your class's own list,
+and remembers it.
+
+**What it says no to, before sending anything:** a locked list, a full limit,
+a hard-reserved item, or an item that isn't in that raid's loot on raidres.
+Anything raidres itself refuses comes back in raidres's own words. You're
+matched as the signed-in raidres user, not by name alone, so the X never
+reaches somebody else's reserve.
+
+From a terminal, `tools/raidres_lock.py reserve` and `unreserve` do the same.
+`--dry-run` looks everything up and shows what it would send, without sending
+it:
+
+```bash
+python tools/raidres_lock.py reserve WW8CK7 19137 Salahaja Paladin --dry-run
+```
+
 ## Commands
 
 | | |
@@ -480,7 +517,8 @@ failure.
 ```bash
 lua tools/test_bridge.lua   # lists, the merge, typed reserves, names   (139)
 lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (118)
-lua tools/test_gui.lua      # the window, minimap button, RollFor box   (365)
+lua tools/test_gui.lua      # the window, minimap button, RollFor box   (397)
+python tools/test_lock.py   # reserving on raidres, in a throwaway Chrome (41)
 lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Minimap.lua Chat.lua
 ```
 
@@ -494,6 +532,10 @@ lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.l
   what's on screen after each step: row texts, the hint line, enabled
   buttons, tooltips. It has no layout engine, so it can't catch a misplaced
   frame.
+- **`test_lock.py`** runs the watcher's real in-page reserve script in a
+  throwaway headless Chrome on `about:blank`, with `fetch` answering from the
+  fixtures. It checks the actual JavaScript against raidres's own reply
+  shapes, and nothing leaves the machine.
 - **The suites are mutation-checked.** Each behaviour they claim to cover was
   broken on purpose, one at a time, to confirm a test fails.
 - **`vanilla_lint.lua`** catches what Lua 5.4 accepts and the 1.12 client
