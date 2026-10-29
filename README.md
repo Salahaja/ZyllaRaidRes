@@ -240,8 +240,8 @@ way to swap it.
                       .-----------------------.
 +---------------------|     Zylla RaidRes     |---------------------- [x] +
 |                     '-----------------------'                           |
-|  Raidres link [ https://raidres.top/res/XXXXXX ] [Fetch] XXXXXX ZG [Locked] |
-|                                                                           |
+|  Raidres link [ https://raidres.top/res/XXXXXX ][v] [Fetch]  XXXXXX      Locked [Unlock] |
+|                                                    Zul'Gurub                           |
 |  Players  12 of 15 done   [ ] Missing only   Loot                         |
 |  +--------------------------------------+   +----------------------------------+ |
 |  | Name                  | Reserves     |   | [Zul'Gurub     v] [Search  ] [x] Usable | |
@@ -265,7 +265,10 @@ way to swap it.
 ```
 
 1. **Paste the link** at the top and press Fetch or Enter. The box keeps the
-   last list's link, so fetching again to refresh it is one click.
+   last list's link, so fetching again to refresh it is one click. The
+   **arrow** beside it lists the last five lists fetched, each with its raid
+   and when, and picking one fetches it again. Beside Fetch is the list's
+   code, with its raid's name underneath.
    The button at the right shows whether raidres has the list **locked**
    (green) or **unlocked** (gold), or *Lock ?* when it isn't known. With
    RaidResHttp.dll it looks again every 30 seconds while the window is open,
@@ -447,8 +450,8 @@ failure.
 
 ```bash
 lua tools/test_bridge.lua   # lists, the merge, typed reserves, names   (139)
-lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (116)
-lua tools/test_gui.lua      # the window, minimap button, RollFor box   (352)
+lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (118)
+lua tools/test_gui.lua      # the window, minimap button, RollFor box   (365)
 lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Minimap.lua Chat.lua
 ```
 

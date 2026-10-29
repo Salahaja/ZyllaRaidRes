@@ -61,6 +61,10 @@ local L_H = D_TOP + D_H - BOX_TOP
 local L_LIST_TOP = 38           -- under the dropdown
 local L_ROWS = 17
 local SCROLLBAR = 22
+local LINK_W = 190              -- a whole raidres link, and a little over
+local LOCK_W = 96
+-- From Fetch to the right edge: the list's code, its raid's name under it.
+local STATUS_W = W - EDGE - (EDGE + 4 + 66 + 12 + LINK_W + 2 + 24 + 4 + 70 + 10)
 local HINT_TOP = D_TOP + D_H + 6
 local R_TOP = HINT_TOP + ROW_H + 22     -- the RollFor box; its label sits above
 local R_H = 36
@@ -755,7 +759,7 @@ end
      lists rather than naming widgets one by one, so a button added next year
      is skinned without anyone remembering to add it there. ]]
 local parts = { box = {}, button = {}, check = {}, edit = {}, drop = {},
-                scroll = {}, close = {}, header = {}, row = {} }
+                scroll = {}, close = {}, header = {}, row = {}, arrow = {} }
 local function part(kind, w)
     table.insert(parts[kind], w)
     return w
@@ -1325,6 +1329,7 @@ function RB.SkinForPfUI(f)
         end
         if api.SkinScrollbar then each("scroll", function(s) api.SkinScrollbar(s) end) end
         if api.SkinCloseButton then each("close", function(c) api.SkinCloseButton(c) end) end
+        if api.SkinArrowButton then each("arrow", function(a) api.SkinArrowButton(a, "down", 18) end) end
         each("header", function(h) api.StripTextures(h) end)
         -- A row lights flat, the way pfUI's own lists do, not with the glow.
         each("row", function(r)
@@ -1393,29 +1398,54 @@ function RB.BuildGui()
     local linkLabel = text(f, "GameFontNormalSmall")
     linkLabel:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, -38)
     linkLabel:SetText("Raidres link")
-    f.link = editBox(f, "ZyllaRaidResLink", 214, "Paste a link or code")
+    f.link = editBox(f, "ZyllaRaidResLink", LINK_W, "Paste a link or code")
     f.link:SetPoint("LEFT", linkLabel, "RIGHT", 12, 0)
     f.link:SetMaxLetters(120)
     f.link:SetScript("OnEnterPressed", function() RB.FetchFromBox() end)
     f.link:SetScript("OnTextChanged", function() syncPlaceholder(this) end)
 
+    -- The last few lists, from the arrow a dropdown has, beside the box.
+    f.recent = part("arrow", CreateFrame("Button", "ZyllaRaidResRecentButton", f))
+    f.recent:SetWidth(24)
+    f.recent:SetHeight(24)
+    f.recent:SetPoint("LEFT", f.link, "RIGHT", 2, 0)
+    f.recent:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIcon-ScrollDown-Up")
+    f.recent:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIcon-ScrollDown-Down")
+    f.recent:SetDisabledTexture("Interface\\ChatFrame\\UI-ChatIcon-ScrollDown-Disabled")
+    f.recent:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight")
+    local rhl = f.recent:GetHighlightTexture()
+    if rhl then rhl:SetBlendMode("ADD") end
+    f.recent:SetScript("OnClick", function()
+        ToggleDropDownMenu(1, nil, RB.gui.recentMenu, "ZyllaRaidResLink", 0, 0)
+    end)
+    tip(f.recent, "Recent lists", "The last " .. RB.RECENT .. " lists fetched. Pick one to fetch it again.")
+    f.recentMenu = CreateFrame("Frame", "ZyllaRaidResRecentMenu", f, "UIDropDownMenuTemplate")
+    UIDropDownMenu_Initialize(f.recentMenu, RB.InitRecentMenu, "MENU")
+
     f.fetch = button(f, "Fetch", 70)
-    f.fetch:SetPoint("LEFT", f.link, "RIGHT", 6, 0)
+    f.fetch:SetPoint("LEFT", f.recent, "RIGHT", 4, 0)
     f.fetch:SetScript("OnClick", function() RB.FetchFromBox() end)
     tip(f.fetch, "Fetch", "")
 
+    -- Two lines in the button's height: the list's code, and its raid under
+    -- it. One line sits in the middle.
     f.status = text(f, "GameFontHighlightSmall")
-    f.status:SetPoint("LEFT", f.fetch, "RIGHT", 10, 0)
-    f.status:SetWidth(W - EDGE - (EDGE + 4 + 66 + 12 + 214 + 6 + 70 + 10) - 96 - 80 - 6)
-    f.status:SetHeight(ROW_H)
+    f.status:SetPoint("TOPLEFT", f.fetch, "TOPRIGHT", 10, 0)
+    f.status:SetWidth(STATUS_W)
+    f.status:SetHeight(22)
+    f.place = text(f, "GameFontDisableSmall")
+    f.place:SetPoint("TOPLEFT", f.status, "TOPLEFT", 0, -12)
+    f.place:SetWidth(STATUS_W)
+    f.place:SetHeight(12)
 
     f.lockState = text(f, "GameFontHighlightSmall")
-    f.lockState:SetPoint("RIGHT", f, "TOPRIGHT", -EDGE - 96 - 6, -35 + ROW_H / 2)
+    -- level with the middle of the lock button, as Fetch's row is
+    f.lockState:SetPoint("RIGHT", f, "TOPRIGHT", -EDGE - LOCK_W - 6, -33 - 11)
     f.lockState:SetJustifyH("RIGHT")
     f.lockState:Hide()
 
-    f.lockBtn = button(f, "", 96)
-    f.lockBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -EDGE, -35)
+    f.lockBtn = button(f, "", LOCK_W)
+    f.lockBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -EDGE, -33)
     f.lockBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     f.lockBtn:SetScript("OnClick", function()
         if arg1 == "RightButton" then RB.LockRightClick() else RB.LockClick() end
@@ -1650,17 +1680,19 @@ function RB.DrawStatus()
     local f = RB.gui
     if not f then return end
     local s = f.snap
-    local line
+    local line, place
     if RB.HttpBusy and RB.HttpBusy() then
         line = hex(GOLD, "Fetching from raidres...")
     elseif RB.waiting then
         line = hex(GOLD, "Waiting for the watcher...")
     elseif s and s.ref then
-        line = hex(WHITE, s.ref) .. hex(GREY, "  " .. RB.ListPlace(s))
+        line, place = hex(WHITE, s.ref), RB.ListPlace(s)
     else
         line = hex(GREY, "No list yet. Paste a link, or add reserves by hand.")
     end
     f.status:SetText(line)
+    f.status:SetJustifyV(place and "TOP" or "MIDDLE")
+    f.place:SetText(place or "")
 
     -- The lock state indicator and button: only for a list from raidres.
     if s and s.ref and s.ref ~= "manual" then
@@ -1693,6 +1725,15 @@ function RB.DrawStatus()
         f.lockBtn:Hide()
     end
 
+    -- The status has whatever the lock state and button leave, so a raid's
+    -- name shows whole, and "No list yet" has the row to itself.
+    local room = STATUS_W
+    if f.lockBtn:IsShown() then
+        room = room - LOCK_W - 6 - (f.lockState:GetStringWidth() or 80) - 10
+    end
+    f.status:SetWidth(room)
+    f.place:SetWidth(room)
+
     if RB.Http and RB.Http() then
         f.fetch.tipBody = "Fetches the list in game, through RaidResHttp.dll."
     elseif RB.FileAPI() then
@@ -1722,7 +1763,47 @@ local function ago(seconds)
     if seconds < 60 then return seconds .. " seconds ago" end
     local m = math.floor(seconds / 60)
     if m < 60 then return plural(m, "minute", "minutes") .. " ago" end
-    return plural(math.floor(m / 60), "hour", "hours") .. " ago"
+    local h = math.floor(m / 60)
+    if h < 48 then return plural(h, "hour", "hours") .. " ago" end
+    return plural(math.floor(h / 24), "day", "days") .. " ago"
+end
+
+local function onPickRecent()
+    if CloseDropDownMenus then CloseDropDownMenus() end
+    local f = RB.gui
+    if not f or not this.value then return end
+    f.link:SetText("https://raidres.top/res/" .. this.value)
+    RB.FetchFromBox()
+end
+
+--[[ The Recent menu, built each time it opens: the last lists fetched,
+     newest first, the one loaded now checked. Picking one fetches it. ]]
+function RB.InitRecentMenu()
+    local recent = RaidResBridge_Recent or {}
+    local s = RB.gui and RB.gui.snap
+    local current = s and s.ref and string.lower(s.ref)
+    local info = {}
+    info.text = "Recent lists"
+    info.isTitle = 1
+    UIDropDownMenu_AddButton(info)
+    if table.getn(recent) == 0 then
+        info = {}
+        info.text = "None yet: fetch a list first."
+        info.disabled = 1
+        UIDropDownMenu_AddButton(info)
+        return
+    end
+    local now = time and time()
+    for i = 1, table.getn(recent) do
+        local r = recent[i]
+        info = {}
+        info.text = r.ref .. "  " .. hex(GREY, (r.place or "?") ..
+            ((now and r.at) and (", " .. ago(now - r.at)) or ""))
+        info.value = r.ref
+        info.func = onPickRecent
+        info.checked = (current == string.lower(r.ref)) and 1 or nil
+        UIDropDownMenu_AddButton(info)
+    end
 end
 
 --- When the list RollFor holds was sent: by this session's clock, else the saved one.

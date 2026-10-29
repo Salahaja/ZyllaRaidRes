@@ -465,6 +465,7 @@ function RB.HttpRequest(ref)
             RaidResBridge_Raids = RaidResBridge_Raids or {}
             RaidResBridge_Raids[event.raidId] = RB.ConvertRaid(raid)
             writeRaids()
+            RB.RememberList(ref, data)
 
             if stats.skipped > 0 then
                 say("|cffffcc00" .. stats.skipped .. " reservation(s) skipped|r: " ..

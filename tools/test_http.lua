@@ -96,6 +96,7 @@ local function world(withDll)
     RollFor = { key_bindings = { import = function(d) IMPORTED = d end } }
     RaidResBridge, RaidResBridge_Raids, RaidResBridge_Limit = nil, nil, nil
     RaidResBridge_Data, RaidResBridge_Ref, RaidResBridge_Manual = nil, nil, nil
+    RaidResBridge_Recent = nil
 
     if withDll then
         -- The DLL, as Lua sees it.
@@ -274,6 +275,8 @@ do
     check("the raid's loot table is cached", RaidResBridge_Raids and RaidResBridge_Raids[100] ~= nil, true)
     checkSame("as the watcher would", RaidResBridge_Raids[100], Expected_Raids[100])
     check("and written down", FILES["RaidResBridge_raids.lua"] ~= nil, true)
+    check("the list is remembered for the Recent menu", RaidResBridge_Recent and RaidResBridge_Recent[1].ref, "DEMO42")
+    check("with its raid", RaidResBridge_Recent[1].place, Expected_Raids[100].name)
     check("the driver goes quiet", DRIVER.shown, false)
     check("and nothing is left in flight", RB.HttpBusy(), false)
 

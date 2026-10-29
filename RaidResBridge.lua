@@ -211,6 +211,24 @@ function RB.LoadRaids()
     return RaidResBridge_Raids ~= nil
 end
 
+--[[ The last few lists fetched, newest first, for the window's Recent menu:
+     each its reference, its raid's name and when. A list fetched again
+     moves back to the top rather than appearing twice. ]]
+RB.RECENT = 5
+function RB.RememberList(ref, data)
+    if not ref or ref == "" then return end
+    local meta = data and data.metadata or {}
+    local raid = RaidResBridge_Raids and meta.instance and RaidResBridge_Raids[meta.instance]
+    local place = (raid and raid.name) or (meta.instances and meta.instances[1]) or nil
+    local list = { { ref = ref, place = place, at = time and time() or nil } }
+    for _, r in ipairs(RaidResBridge_Recent or {}) do
+        if string.lower(r.ref or "") ~= string.lower(ref) and table.getn(list) < RB.RECENT then
+            table.insert(list, r)
+        end
+    end
+    RaidResBridge_Recent = list
+end
+
 function RB.Describe(data)
     local players, items = 0, 0
     for _, p in ipairs(data.softreserves or {}) do
@@ -280,6 +298,7 @@ poll:SetScript("OnUpdate", function()
     if data and ref == RB.waiting then
         RB.waiting = nil
         RB.elapsed = 0
+        RB.RememberList(ref, data)
         if RB.Apply then RB.Apply() else RB.Load() end
         if RB.gui and RB.gui:IsVisible() then RB.Refresh() end
         return

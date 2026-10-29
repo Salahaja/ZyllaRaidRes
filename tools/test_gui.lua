@@ -273,7 +273,7 @@ local function world(withoutNames)
     GetMinimapShape = nil
     RaidResHttpGet, RaidResHttpResult = nil, nil
     RaidResBridge, RaidResBridge_Manual, RaidResBridge_Limit = nil, nil, nil
-    RaidResBridge_Sent, RaidResBridge_Options = nil, nil
+    RaidResBridge_Sent, RaidResBridge_Options, RaidResBridge_Recent = nil, nil, nil
     RaidResBridge_Data, RaidResBridge_Ref, RaidResBridge_Locked = nil, nil, nil
 
     dofile(DIR .. "expected.lua")
@@ -377,7 +377,8 @@ local f = RB.gui
 check("/rrb on its own opens the window", f and f:IsVisible(), true)
 check("Escape closes it", UISpecialFrames[1], "ZyllaRaidResFrame")
 check("the status names the list", string.find(plain(f.status:GetText()), "DEMO42", 1, true) ~= nil, true)
-check("and its raid", string.find(plain(f.status:GetText()), "Zul'Gurub", 1, true) ~= nil, true)
+check("and its raid, on the line under it", plain(f.place:GetText()), "Zul'Gurub")
+check("not squeezed in beside the code", string.find(plain(f.status:GetText()), "Zul'Gurub", 1, true), nil)
 --[[ The bug this replaces: the loot opened on whatever sorted first, which
      here is Blackwing Lair. ]]
 check("the loot opens on the list's own raid", f.raidDrop.ddText, "Zul'Gurub")
@@ -1074,7 +1075,8 @@ local GREEN_TAG, GOLD_TAG = "|cff20ff20", "|cffffd200"
 check("a list from raidres gets the button", f.lockBtn:IsShown(), true)
 check("it says Locked", plain(f.lockState:GetText()), "Locked")
 check("in green", string.find(f.lockState:GetText(), GREEN_TAG, 1, true) ~= nil, true)
-check("the status is the list and its raid, no more", plain(f.status:GetText()), "DEMO42  Zul'Gurub")
+check("the status is the list and its raid, no more",
+    plain(f.status:GetText()) .. " / " .. plain(f.place:GetText()), "DEMO42 / Zul'Gurub")
 
 local DATA = FILES["RaidResBridge_data.lua"]
 FILES["RaidResBridge_data.lua"] = string.gsub(DATA, "RaidResBridge_Locked = true", "RaidResBridge_Locked = false")
@@ -1268,6 +1270,41 @@ f = RB.gui
 check("nothing to send says so", rfHead(), "Nothing to send yet")
 check("and Send has nothing to do", f.send.enabled, false)
 
+-- ================================================================== recent lists
+print("recent lists")
+RB = world()
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+click(f.recent)
+check("the arrow opens the recent lists", f.recentMenu.ddOpen, true)
+check("none yet, and it says so", MENU[2] and MENU[2].disabled, 1)
+local zg = f.snap.instance
+for i = 1, 6 do RB.RememberList("LIST" .. i, { metadata = { instances = { "Molten Core" } } }) end
+RB.RememberList("DEMO42", { metadata = { instance = zg, instances = { "raidres's name" } } })
+RB.RememberList("list3", { metadata = { instances = { "Molten Core" } } })
+local function recentRefs()
+    local out = {}
+    for _, r in ipairs(RaidResBridge_Recent) do table.insert(out, r.ref) end
+    return table.concat(out, ",")
+end
+check("five at most, newest first, a repeat moved up", recentRefs(), "list3,DEMO42,LIST6,LIST5,LIST4")
+check("the raid named as the loot tables name it", RaidResBridge_Recent[2].place, "Zul'Gurub")
+RB.RememberList("DEMO42", { metadata = { instance = zg } })
+check("fetched again, it moves to the top, once", recentRefs(), "DEMO42,list3,LIST6,LIST5,LIST4")
+click(f.recent)
+check("each with its raid and when", plain(MENU[2].text), "DEMO42  Zul'Gurub, just now")
+check("the one loaded now is checked", MENU[2].checked, 1)
+check("and only that one", MENU[3].checked, nil)
+FILES["RaidResBridge_request.txt"] = nil
+pick(MENU[3])
+check("picking one puts its link in the box", f.link:GetText(), "https://raidres.top/res/list3")
+check("and fetches it", FILES["RaidResBridge_request.txt"], "list3")
+-- the watcher answers: that list is remembered too
+FILES["RaidResBridge_data.lua"] = string.gsub(slurp(DIR .. "RaidResBridge_data.lua"), "DEMO42", "NEW777")
+RB.Request("NEW777")
+run(3)
+check("a list the watcher fetched joins them", RaidResBridge_Recent[1].ref, "NEW777")
+
 -- ================================================================== the minimap button
 print("the minimap button")
 RB = world()
@@ -1348,7 +1385,7 @@ pfUI = { api = {
     CreateBackdropShadow = rec("CreateBackdropShadow"), StripTextures = rec("StripTextures"),
     SkinButton = rec("SkinButton"), SkinCheckbox = rec("SkinCheckbox"),
     SkinDropDown = rec("SkinDropDown"), SkinScrollbar = rec("SkinScrollbar"),
-    SkinCloseButton = rec("SkinCloseButton"),
+    SkinCloseButton = rec("SkinCloseButton"), SkinArrowButton = rec("SkinArrowButton"),
 } }
 SlashCmdList.RAIDRESBRIDGE("")
 f = RB.gui
@@ -1359,6 +1396,7 @@ check("both checkboxes", CALLS.SkinCheckbox, 2)
 check("the dropdown", CALLS.SkinDropDown, 1)
 check("both scroll bars", CALLS.SkinScrollbar, 2)
 check("its close button and each reserve's", CALLS.SkinCloseButton, 5)
+check("the Recent arrow", CALLS.SkinArrowButton, 1)
 check("and the RollFor box", f.rBox.backdrop ~= nil, true)
 check("rows light flat, as pfUI's lists do", f.pRows[1].hl.blend, "BLEND")
 check("and drops the Blizzard banner", f.header:IsShown(), false)

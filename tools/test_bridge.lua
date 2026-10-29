@@ -67,6 +67,7 @@ local function freshWorld()
     RaidResBridge_Data, RaidResBridge_Ref = nil, nil
     RaidResBridge = nil
     RaidResBridge_Manual, RaidResBridge_Sent, RaidResBridge_Options = nil, nil, nil
+    RaidResBridge_Recent = nil
     dofile(ROOT .. "RaidResBridge.lua")
     RaidResBridge_Names = nil
     dofile(ROOT .. "Names.lua")
