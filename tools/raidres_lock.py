@@ -180,14 +180,14 @@ def find_chrome_exe():
             return pattern
     return None
 
-def start_chrome():
+def start_chrome(url=None):
     exe = find_chrome_exe()
     if not exe:
         log("Chrome not found in the usual places.")
         return False
     profile = os.path.join(os.environ.get("LocalAppData", ""), "chrome-cdp-raidres")
     args = [exe, "--remote-debugging-port=%d" % CDP_PORT,
-            "--user-data-dir=%s" % profile, "https://raidres.top"]
+            "--user-data-dir=%s" % profile, url or "https://raidres.top"]
     log("starting Chrome with CDP...")
     import subprocess
     subprocess.Popen(args, close_fds=True)
@@ -199,10 +199,10 @@ def start_chrome():
     log("Chrome started but CDP not reachable after 20s.")
     return False
 
-def ensure_chrome():
+def ensure_chrome(url=None):
     if check_chrome():
         return True
-    return start_chrome()
+    return start_chrome(url)
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +218,7 @@ def validate_ref(ref):
 
 def open_event(ref):
     validate_ref(ref)
-    if not ensure_chrome():
+    if not ensure_chrome("https://raidres.top/res/%s" % ref):
         return "error: could not start Chrome"
     tab = find_raidres_tab()
     if not tab:
@@ -239,7 +239,7 @@ def open_event(ref):
 
 def lock_unlock(ref, locked):
     validate_ref(ref)
-    if not ensure_chrome():
+    if not ensure_chrome("https://raidres.top/res/%s" % ref):
         return "error: could not start Chrome"
     tab = find_raidres_tab()
     if not tab:
