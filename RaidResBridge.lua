@@ -338,6 +338,7 @@ SlashCmdList["RAIDRESBRIDGE"] = function(msg)
         say("|cffffffff/rrb <raidres link>|r fetches a list and imports it.")
         say("|cffffffff/rrb load|r imports what was fetched, plus anything typed.")
         say("|cffffffff/rrb lockcontrol|r toggle locking and unlocking from in game (needs the helper script).")
+        say("|cffffffff/rrb restart|r restart the helper script's Chrome (if it gets stuck).")
         if RB.Http and RB.Http() then
             say("|cff888888Fetching in game (RaidResHttp.dll is loaded).|r")
         else
@@ -361,6 +362,23 @@ SlashCmdList["RAIDRESBRIDGE"] = function(msg)
         else
             local state = RaidResBridge_LockControl and "|cff00ff00on|r" or "|cffff5179off|r"
             say("Lock control is " .. state .. ". |cffffffff/rrb lockcontrol on|r or |cffffffffoff|r.")
+        end
+        if RB.DrawStatus then RB.DrawStatus() end
+        return
+    end
+
+    if cmd == "restart" then
+        if not RB.FileAPI() then
+            say("can't reach the helper script (no file API).")
+            return
+        end
+        pcall(WriteCustomFile, "RaidResBridge_lock_result.txt", "", "w")
+        local ok = pcall(WriteCustomFile, "RaidResBridge_lock_cmd.txt", "restart", "w")
+        if ok then
+            RB.sessionExpired = nil
+            say("restart sent to the helper script.")
+        else
+            say("could not write the restart command.")
         end
         if RB.DrawStatus then RB.DrawStatus() end
         return

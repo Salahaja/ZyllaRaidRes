@@ -558,6 +558,16 @@ function RB.SendOpenCommand(ref)
     return ok
 end
 
+function RB.SendSigninCommand(ref)
+    if not RB.FileAPI() then return false end
+    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
+    local ok = pcall(WriteCustomFile, LOCK_CMD, "signin " .. ref, "w")
+    if not ok then return false end
+    RB.lockPending = { ref = ref, signin = true, sent = GetTime() }
+    lockTick:Show()
+    return true
+end
+
 function RB.CheckLockResult()
     if not RB.lockPending then lockTick:Hide() return end
     local pending = RB.lockPending
@@ -571,12 +581,29 @@ function RB.CheckLockResult()
     if not ok or type(text) ~= "string" or text == "" then return end
     pcall(WriteCustomFile, LOCK_RESULT, "", "w")
     RB.lockPending = nil
-    if text == "ok" then
-        RB.SetLock(pending.ref, pending.lock)
-        local s = RB.gui and RB.gui:IsVisible() and RB.gui.snap
-        if s then
-            s.locked, s.lockAt = RB.LockState(s.ref)
+    if text == "ok" or string.sub(text, 1, 3) == "ok " then
+        if pending.signin then
+            RB.sessionExpired = nil
+            if RB.Notice then RB.Notice("Chrome opened. Sign in on raidres, then try again.") end
+        else
+            RB.sessionExpired = nil
+            RB.SetLock(pending.ref, pending.lock)
+            local s = RB.gui and RB.gui:IsVisible() and RB.gui.snap
+            if s then
+                s.locked, s.lockAt = RB.LockState(s.ref)
+            end
+            if string.len(text) > 3 then
+                RB.sessionExpiry = string.sub(text, 4)
+            end
         end
+    elseif text == "signin" or string.sub(text, 1, 7) == "signin " then
+        RB.sessionExpired = true
+        if string.len(text) > 7 then
+            RB.sessionExpiry = string.sub(text, 8)
+        else
+            RB.sessionExpiry = nil
+        end
+        if RB.Notice then RB.Notice("raidres session expired. Click Sign in.") end
     else
         if RB.Notice then RB.Notice(text) end
     end

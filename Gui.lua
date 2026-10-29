@@ -1410,6 +1410,15 @@ function RB.LockClick()
             RB.Notice("already sending...")
             return
         end
+        if RB.sessionExpired then
+            if RB.SendSigninCommand(ref) then
+                RB.Notice("opening Chrome for sign in...")
+                RB.DrawStatus()
+            else
+                RB.Notice("can't reach the lock script. Is Nampower loaded?")
+            end
+            return
+        end
         local state = RB.LockLabel(s)
         if state == "unknown" then
             if RB.Http and RB.Http() then
@@ -1455,12 +1464,17 @@ function RB.LockTooltip(owner)
         GameTooltip:AddLine("Not known right now.", 0.5, 0.5, 0.5, 1)
     end
     if RB.LockControlReady and RB.LockControlReady() then
-        if RB.lockPending then
+        if RB.sessionExpired then
+            GameTooltip:AddLine("Session expired. Click to open Chrome and sign in.", 1, 0.13, 0.13, 1)
+        elseif RB.lockPending then
             GameTooltip:AddLine("Sending to the lock script...", 1, 0.82, 0, 1)
         elseif state ~= "unknown" then
             GameTooltip:AddLine("Click to " .. (s.locked and "unlock" or "lock") .. " it.", 1, 1, 1, 1)
         else
             GameTooltip:AddLine("Click to check the state.", 0.5, 0.5, 0.5, 1)
+        end
+        if RB.sessionExpiry then
+            GameTooltip:AddLine("Session: " .. RB.sessionExpiry, 0.5, 0.5, 0.5, 1)
         end
         GameTooltip:AddLine("Right-click to open on raidres in Chrome.", 0.5, 0.5, 0.5, 1)
         GameTooltip:AddLine("Lock control on (/rrb lockcontrol). Needs the helper script.", 0.5, 0.5, 0.5, 1)
@@ -1513,11 +1527,17 @@ function RB.DrawStatus()
     -- The lock state indicator and button: only for a list from raidres.
     if s and s.ref and s.ref ~= "manual" then
         local state = RB.LockLabel(s)
-        f.lockState:SetText(state == "locked" and hex(GREEN, "Locked")
-            or state == "unlocked" and hex(GOLD, "Unlocked") or hex(GREY, "Lock ?"))
+        if RB.sessionExpired then
+            f.lockState:SetText(hex(RED, "Session expired"))
+        else
+            f.lockState:SetText(state == "locked" and hex(GREEN, "Locked")
+                or state == "unlocked" and hex(GOLD, "Unlocked") or hex(GREY, "Lock ?"))
+        end
         f.lockState:Show()
         if RB.lockPending then
             f.lockBtn:SetText("...")
+        elseif RB.sessionExpired then
+            f.lockBtn:SetText("Sign in")
         elseif RB.LockControlReady and RB.LockControlReady() then
             if state == "locked" then
                 f.lockBtn:SetText("Unlock")

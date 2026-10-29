@@ -8,8 +8,7 @@ cookie itself, the same way it would if you clicked the button on the page.
 
 Requirements
   Python 3           (already needed for the watcher)
-  Chrome             running with  --remote-debugging-port=9222
-  A raidres.top tab  signed in (the script opens one if there isn't one)
+  Chrome             (launched automatically in headless mode)
 
 No pip packages.  The WebSocket client is 80 lines of stdlib.
 
@@ -25,6 +24,9 @@ import http.client, json, os, socket, struct, sys, time, re
 
 CDP_PORT = 9222
 CDP_HOST = "127.0.0.1"
+
+_chrome_proc = None
+_headless = False
 
 # ---------------------------------------------------------------------------
 # Minimal WebSocket client -- just enough for CDP (text frames, no TLS)
@@ -170,7 +172,6 @@ def check_chrome():
         return False
 
 def find_chrome_exe():
-    import glob
     for pattern in [
         os.path.join(os.environ.get("ProgramFiles", ""), "Google", "Chrome", "Application", "chrome.exe"),
         os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
@@ -180,17 +181,22 @@ def find_chrome_exe():
             return pattern
     return None
 
-def start_chrome(url=None):
+def start_chrome(url=None, headless=False):
+    global _chrome_proc, _headless
     exe = find_chrome_exe()
     if not exe:
         log("Chrome not found in the usual places.")
         return False
     profile = os.path.join(os.environ.get("LocalAppData", ""), "chrome-cdp-raidres")
     args = [exe, "--remote-debugging-port=%d" % CDP_PORT,
-            "--user-data-dir=%s" % profile, url or "https://raidres.top"]
-    log("starting Chrome with CDP...")
+            "--user-data-dir=%s" % profile]
+    if headless:
+        args.append("--headless=new")
+    args.append(url or "https://raidres.top")
+    log("starting Chrome%s with CDP..." % (" (headless)" if headless else ""))
     import subprocess
-    subprocess.Popen(args, close_fds=True)
+    _chrome_proc = subprocess.Popen(args, close_fds=True)
+    _headless = headless
     for _ in range(20):
         time.sleep(1)
         if check_chrome():
@@ -199,10 +205,63 @@ def start_chrome(url=None):
     log("Chrome started but CDP not reachable after 20s.")
     return False
 
-def ensure_chrome(url=None):
+def kill_chrome():
+    global _chrome_proc, _headless
+    if _chrome_proc and _chrome_proc.poll() is None:
+        log("stopping Chrome (PID %d)..." % _chrome_proc.pid)
+        import subprocess as sp
+        sp.call(["taskkill", "/T", "/F", "/PID", str(_chrome_proc.pid)],
+                stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+    _chrome_proc = None
+    _headless = False
+    for _ in range(10):
+        if not check_chrome():
+            return True
+        time.sleep(1)
+    return not check_chrome()
+
+def ensure_chrome(url=None, need_visible=False):
     if check_chrome():
+        if need_visible and _headless:
+            kill_chrome()
+            return start_chrome(url, headless=False)
         return True
-    return start_chrome(url)
+    return start_chrome(url, headless=(not need_visible))
+
+
+# ---------------------------------------------------------------------------
+# Session expiry
+# ---------------------------------------------------------------------------
+
+def _get_expiry(ws):
+    try:
+        result = ws.call("Network.getCookies", {"urls": ["https://raidres.top"]})
+        cookies = result.get("result", {}).get("cookies", [])
+        nearest = None
+        for c in cookies:
+            exp = c.get("expires", -1)
+            if exp > 0:
+                if nearest is None or exp < nearest:
+                    nearest = exp
+        return int(nearest) if nearest else None
+    except Exception:
+        return None
+
+def _format_expiry(ts):
+    if ts is None:
+        return None
+    remaining = ts - time.time()
+    if remaining <= 0:
+        return "expired"
+    when = time.strftime("%b %d %H:%M", time.localtime(ts))
+    days = int(remaining // 86400)
+    hours = int((remaining % 86400) // 3600)
+    if days > 0:
+        return "%dd %dh (%s)" % (days, hours, when)
+    mins = int((remaining % 3600) // 60)
+    if hours > 0:
+        return "%dh %dm (%s)" % (hours, mins, when)
+    return "%dm (%s)" % (max(1, mins), when)
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +277,7 @@ def validate_ref(ref):
 
 def open_event(ref):
     validate_ref(ref)
-    if not ensure_chrome("https://raidres.top/res/%s" % ref):
+    if not ensure_chrome("https://raidres.top/res/%s" % ref, need_visible=True):
         return "error: could not start Chrome"
     tab = find_raidres_tab()
     if not tab:
@@ -266,25 +325,46 @@ def lock_unlock(ref, locked):
             "awaitPromise": True,
             "returnByValue": True,
         })
+
+        value = (result.get("result", {}).get("result", {}).get("value", "")
+                 if "result" in result else "")
+
+        if not value:
+            err = result.get("result", {}).get("exceptionDetails", {})
+            return "error: CDP eval failed: %s" % json.dumps(err)
+
+        if value == "200":
+            expiry = _format_expiry(_get_expiry(ws))
+            if expiry:
+                return "ok %s" % expiry
+            return "ok"
+        elif value.startswith("error:"):
+            return "error: " + value[6:]
+        else:
+            status = value
+            if status in ("401", "403"):
+                expiry = _format_expiry(_get_expiry(ws))
+                if expiry:
+                    return "signin %s" % expiry
+                return "signin"
+            return "error: raidres returned HTTP %s" % status
     finally:
         ws.close()
 
-    value = (result.get("result", {}).get("result", {}).get("value", "")
-             if "result" in result else "")
-
-    if not value:
-        err = result.get("result", {}).get("exceptionDetails", {})
-        return "error: CDP eval failed: %s" % json.dumps(err)
-
-    if value == "200":
-        return "ok"
-    elif value.startswith("error:"):
-        return "error: " + value[6:]
-    else:
-        status = value
-        if status in ("401", "403"):
-            return "error: not signed in to raidres in Chrome (HTTP %s)" % status
-        return "error: raidres returned HTTP %s" % status
+def signin(ref):
+    validate_ref(ref)
+    login_url = "https://raidres.top/"
+    if not ensure_chrome(login_url, need_visible=True):
+        return "error: could not start Chrome"
+    tab = find_raidres_tab()
+    if tab and tab.get("webSocketDebuggerUrl"):
+        ws = WebSocket(tab["webSocketDebuggerUrl"])
+        try:
+            ws.call("Page.navigate", {"url": login_url})
+            ws.call("Page.bringToFront")
+        finally:
+            ws.close()
+    return "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +409,7 @@ def watch():
         else:
             log("no raidres tab -- one will be opened on the first request")
     else:
-        log("Chrome is not running yet -- it will be started on the first request")
+        log("Chrome will be started headless on the first request")
 
     log("watching %s" % cmd_path)
     log("press Ctrl+C to stop")
@@ -342,7 +422,15 @@ def watch():
                 os.remove(cmd_path)
 
                 parts = line.split(None, 1)
-                if len(parts) != 2 or parts[0] not in ("lock", "unlock", "open"):
+                if len(parts) == 1 and parts[0] == "restart":
+                    log("restart requested")
+                    kill_chrome()
+                    log("Chrome stopped. Will start fresh on next command.")
+                    with open(result_path, "w") as f:
+                        f.write("ok restarted")
+                    continue
+
+                if len(parts) != 2 or parts[0] not in ("lock", "unlock", "open", "signin"):
                     log("bad command: %r" % line)
                     with open(result_path, "w") as f:
                         f.write("error: bad command")
@@ -351,7 +439,9 @@ def watch():
                 action, ref = parts
                 log("%s %s ..." % (action, ref))
 
-                if action == "open":
+                if action == "signin":
+                    result = signin(ref)
+                elif action == "open":
                     result = open_event(ref)
                 else:
                     result = lock_unlock(ref, action == "lock")
@@ -364,6 +454,9 @@ def watch():
 
         except KeyboardInterrupt:
             log("stopped")
+            if _headless:
+                kill_chrome()
+                log("headless Chrome stopped.")
             break
         except Exception as e:
             log("error: %s" % e)
@@ -415,7 +508,7 @@ def main():
         else:
             result = lock_unlock(ref, cmd == "lock")
         print(result)
-        sys.exit(0 if result == "ok" else 1)
+        sys.exit(0 if result.startswith("ok") else 1)
 
     else:
         print("unknown command: %s" % cmd)
