@@ -103,7 +103,12 @@ function Report {
     if ($StopLeftovers -and $leftovers.Count -gt 0) {
         ""
         foreach ($p in $leftovers) {
-            & taskkill /T /F /PID $p.ProcessId | Out-Null
+            # A Chrome may already have gone with the watcher stopped before it.
+            if (-not (Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue)) {
+                "$($p.Name) $($p.ProcessId) already went with its watcher"
+                continue
+            }
+            cmd /c "taskkill /T /F /PID $($p.ProcessId) >nul 2>&1"
             "stopped $($p.Name) $($p.ProcessId) and its children"
         }
     }

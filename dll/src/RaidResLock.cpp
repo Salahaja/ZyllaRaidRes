@@ -6,7 +6,8 @@
 //      addon can detect the DLL and enable lock control automatically.
 //   2. Starts the Python watcher (tools/raidres_lock.py watch) that bridges
 //      the addon to Chrome for locking and unlocking raidres events.
-//   3. Kills the watcher and headless Chrome when the game exits.
+//   3. Ends the watcher and its headless Chrome with the game, however the
+//      game ends: they run in a kill-on-close job only the game holds.
 //
 // Users who do not want lock control simply leave this DLL out of dlls.txt.
 // The addon falls back to its check-only behavior.
@@ -22,6 +23,7 @@
 #include <string>
 
 #include "MinHook.h"
+#include "watcher_job.h"
 
 // ---------------------------------------------------------------------------
 // The client (same offsets as RaidResHttp)
@@ -49,7 +51,7 @@ const auto PushNumber = reinterpret_cast<pushnumber_t>(0x006F3810);
 
 namespace {
 
-HANDLE g_watcherProcess = nullptr;
+HANDLE g_job = nullptr;     // the watcher and all it starts; see watcher_job.h
 
 // Find python.exe on PATH.
 bool FindPython(char *out, DWORD size) {
@@ -76,9 +78,12 @@ void StartWatcher() {
     if (!FindPython(python, MAX_PATH)) return;
     if (!FindScript(script, MAX_PATH)) return;
 
-    // Build command line: python "path\to\raidres_lock.py" watch
+    // python "path\to\raidres_lock.py" watch --parent <this game>: the
+    // watcher also stops by itself once this game has gone, in case the job
+    // below could not be made.
     char cmdline[1024];
-    _snprintf(cmdline, sizeof(cmdline), "\"%s\" \"%s\" watch", python, script);
+    _snprintf(cmdline, sizeof(cmdline), "\"%s\" \"%s\" watch --parent %lu",
+              python, script, GetCurrentProcessId());
 
     // Working directory: the WoW.exe folder, so find_customdata works.
     char cwd[MAX_PATH];
@@ -86,41 +91,19 @@ void StartWatcher() {
     char *slash = strrchr(cwd, '\\');
     if (slash) slash[1] = '\0';
 
-    STARTUPINFOA si = {};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    PROCESS_INFORMATION pi = {};
-
-    if (CreateProcessA(nullptr, cmdline, nullptr, nullptr, FALSE,
-                       CREATE_NO_WINDOW, nullptr, cwd, &si, &pi)) {
-        g_watcherProcess = pi.hProcess;
-        CloseHandle(pi.hThread);
-    }
+    g_job = StartInJob(cmdline, cwd, nullptr);
 }
 
+/* On a normal exit: end the watcher and everything it started, now. The
+   job holds exactly those -- its python, its Chrome and Chrome's helpers --
+   and never the player's own browser. A crash skips this, and Windows does
+   the same when it closes the game's handle to the job. No process is
+   started here: DllMain is no place to start one. */
 void StopWatcher() {
-    if (!g_watcherProcess) return;
-
-    // Kill the watcher process tree (includes any child python).
-    char cmd[128];
-    DWORD pid = GetProcessId(g_watcherProcess);
-    _snprintf(cmd, sizeof(cmd), "taskkill /T /F /PID %lu", pid);
-    STARTUPINFOA si = {};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    PROCESS_INFORMATION pi = {};
-    if (CreateProcessA(nullptr, cmd, nullptr, nullptr, FALSE,
-                       CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
-        WaitForSingleObject(pi.hProcess, 5000);
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-    }
-    // /T above already took the watcher's own Chrome (a child process); a
-    // blanket chrome.exe kill would close the user's own browser too.
-    CloseHandle(g_watcherProcess);
-    g_watcherProcess = nullptr;
+    if (!g_job) return;
+    TerminateJobObject(g_job, 0);
+    CloseHandle(g_job);
+    g_job = nullptr;
 }
 
 // ---------------------------------------------------------------------------

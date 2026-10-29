@@ -1,5 +1,6 @@
 @echo off
-rem Builds RaidResHttp.dll (32-bit, static CRT), test_fetch.exe and test_local.exe.
+rem Builds RaidResHttp.dll and RaidResLock.dll (32-bit, static CRT), and the
+rem test programs test_fetch.exe, test_local.exe and test_lockjob.exe.
 setlocal
 call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars32.bat" >nul || exit /b 1
 cd /d "%~dp0"
@@ -11,3 +12,4 @@ cl %FLAGS% /LD src\RaidResHttp.cpp %SRCS% /Fe:build\RaidResHttp.dll /link /DEF:s
 cl %FLAGS% /LD src\RaidResLock.cpp %SRCS% /Fe:build\RaidResLock.dll /link /DEF:src\RaidResLock.def || exit /b 1
 cl %FLAGS% src\test_fetch.cpp %SRCS% /Fe:build\test_fetch.exe || exit /b 1
 cl %FLAGS% src\test_local.cpp %SRCS% /Fe:build\test_local.exe || exit /b 1
+cl %FLAGS% src\test_lockjob.cpp /Fe:build\test_lockjob.exe || exit /b 1

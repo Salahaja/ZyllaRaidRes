@@ -14,6 +14,7 @@ No pip packages.  The WebSocket client is 80 lines of stdlib.
 
 Usage
   python raidres_lock.py watch          watch CustomData for addon requests
+  python raidres_lock.py watch --parent PID   ...and stop when process PID closes
   python raidres_lock.py lock   REF    lock event REF and exit
   python raidres_lock.py unlock REF    unlock event REF and exit
   python raidres_lock.py open   REF    open event REF in Chrome and exit
@@ -181,6 +182,58 @@ def find_chrome_exe():
             return pattern
     return None
 
+_chrome_job = None
+
+def _bound_to_us(proc):
+    """Ties a process started suspended to this one, then lets it run.
+
+    It goes into a job that ends everything in it when its last handle
+    closes, and only this process holds that handle -- so the Chrome this
+    starts, and every helper Chrome starts, goes when this process goes,
+    however it goes. The game ending kills this watcher outright (the DLL's
+    job, or the python.exe launcher's), and nothing in here would get the
+    chance to close Chrome by hand. Any trouble just lets it run unbound."""
+    global _chrome_job
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateJobObjectW.restype = wintypes.HANDLE
+    k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
+    k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int,
+                                            ctypes.c_void_p, wintypes.DWORD]
+    k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    try:
+        if _chrome_job is None:
+            class Basic(ctypes.Structure):
+                _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
+                            ("PerJobUserTimeLimit", ctypes.c_int64),
+                            ("LimitFlags", wintypes.DWORD),
+                            ("MinimumWorkingSetSize", ctypes.c_size_t),
+                            ("MaximumWorkingSetSize", ctypes.c_size_t),
+                            ("ActiveProcessLimit", wintypes.DWORD),
+                            ("Affinity", ctypes.c_size_t),
+                            ("PriorityClass", wintypes.DWORD),
+                            ("SchedulingClass", wintypes.DWORD)]
+            class Extended(ctypes.Structure):
+                _fields_ = [("BasicLimitInformation", Basic),
+                            ("IoInfo", ctypes.c_uint64 * 6),
+                            ("ProcessMemoryLimit", ctypes.c_size_t),
+                            ("JobMemoryLimit", ctypes.c_size_t),
+                            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                            ("PeakJobMemoryUsed", ctypes.c_size_t)]
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+            JobObjectExtendedLimitInformation = 9
+            job = k32.CreateJobObjectW(None, None)
+            info = Extended()
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if job and k32.SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+                                                   ctypes.byref(info), ctypes.sizeof(info)):
+                _chrome_job = job
+        if _chrome_job and not k32.AssignProcessToJobObject(_chrome_job, int(proc._handle)):
+            log("couldn't tie Chrome to the watcher (error %d)" % ctypes.get_last_error())
+    finally:
+        ctypes.WinDLL("ntdll").NtResumeProcess(wintypes.HANDLE(int(proc._handle)))
+
 def start_chrome(url=None, headless=False):
     global _chrome_proc, _headless
     exe = find_chrome_exe()
@@ -195,7 +248,9 @@ def start_chrome(url=None, headless=False):
     args.append(url or "https://raidres.top")
     log("starting Chrome%s with CDP..." % (" (headless)" if headless else ""))
     import subprocess
-    _chrome_proc = subprocess.Popen(args, close_fds=True)
+    CREATE_SUSPENDED = 0x4
+    _chrome_proc = subprocess.Popen(args, close_fds=True, creationflags=CREATE_SUSPENDED)
+    _bound_to_us(_chrome_proc)
     _headless = headless
     for _ in range(20):
         time.sleep(1)
@@ -392,7 +447,28 @@ RESULT_FILE = "RaidResBridge_lock_result.txt"
 def log(msg):
     print("[%s] %s" % (time.strftime("%H:%M:%S"), msg))
 
-def watch():
+def still_running(pid):
+    """A function saying whether process `pid` is still running.
+
+    A handle is taken now and waited on later, so a PID that Windows hands
+    to a new process after the game closes can't pass for the game. If the
+    process can't be opened for some other reason than being gone, it is
+    taken to be running: better a watcher too many than one that quits
+    while its game is still open."""
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    SYNCHRONIZE, WAIT_TIMEOUT, ERROR_INVALID_PARAMETER = 0x00100000, 0x102, 87
+    handle = k32.OpenProcess(SYNCHRONIZE, False, pid)
+    if not handle:
+        gone = ctypes.get_last_error() == ERROR_INVALID_PARAMETER
+        return lambda: not gone
+    return lambda: k32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+
+def watch(parent=None):
     cd = find_customdata()
     if not cd:
         print("ERROR: can't find CustomData folder.  Run from inside the WoW tree,")
@@ -412,10 +488,22 @@ def watch():
         log("Chrome will be started headless on the first request")
 
     log("watching %s" % cmd_path)
+    game_open = still_running(parent) if parent else None
+    if game_open:
+        log("stopping when process %d (the game) closes" % parent)
     log("press Ctrl+C to stop")
 
     while True:
         try:
+            # The game started this and has gone: go with it, and take the
+            # Chrome this started too. One left running would answer the next
+            # game's commands with a Chrome nothing will ever close.
+            if game_open and not game_open():
+                log("the game has closed; stopping")
+                if _chrome_proc:
+                    kill_chrome()
+                break
+
             if os.path.isfile(cmd_path):
                 with open(cmd_path, "r") as f:
                     line = f.read().strip()
@@ -481,7 +569,14 @@ def main():
     cmd = args[0].lower()
 
     if cmd == "watch":
-        watch()
+        parent = None
+        if "--parent" in args:
+            try:
+                parent = int(args[args.index("--parent") + 1])
+            except (IndexError, ValueError):
+                print("usage: raidres_lock.py watch [--parent PID]")
+                sys.exit(1)
+        watch(parent)
 
     elif cmd == "status":
         if check_chrome():

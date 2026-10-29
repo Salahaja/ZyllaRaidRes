@@ -393,8 +393,37 @@ Chrome automatically:
 
 That's it. When the game starts, the DLL launches the watcher in the
 background and the addon detects it — no `/rrb lockcontrol on` needed.
-Chrome runs headless (no visible window) for lock/unlock. When the game
-exits, the DLL kills the watcher and headless Chrome.
+Chrome runs headless (no visible window) for lock/unlock.
+
+**The watcher and its Chrome close with the game, however the game ends**:
+a normal exit, a crash, or Task Manager. Your own Chrome is never touched;
+the watcher only ever closes the Chrome it started, which uses its own
+profile (`chrome-cdp-raidres`). Two guards make sure of it:
+- **The DLL starts the watcher in a Windows job object.** Only the game
+  holds that job, so Windows ends the watcher whenever the game process
+  ends.
+- **The watcher puts its Chrome in a job of its own**, so Chrome and all its
+  helper processes go when the watcher goes. The watcher is also told the
+  game's process id (`watch --parent`), so it stops by itself if the game
+  has gone.
+
+`dll/build/test_lockjob.exe` checks this. It starts the watcher's own
+`start_chrome` the way the DLL would, then crashes on purpose; nothing may be
+left running.
+
+**To check on your own machine**, run this while the game is open, and again
+after closing it:
+
+```bash
+powershell -ExecutionPolicy Bypass -File Interface/AddOns/ZyllaRaidRes/tools/check_lock_cleanup.ps1
+```
+
+It lists each watcher and its Chrome and says which outlived its game.
+`-WaitForExit` waits for the game to close and then reports.
+`-StopLeftovers` ends anything left behind (only the watcher and its
+profile, never your own Chrome). Builds before 1.5.0 could leave a watcher
+running after the game closed. That watcher kept answering the next game's
+lock commands with a Chrome nothing would close.
 
 **Session expiry.** The lock button tooltip shows when your raidres
 session expires. If the session has expired, the button turns into
