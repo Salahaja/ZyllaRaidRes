@@ -79,6 +79,19 @@ def reference(text):
     return "".join(c for c in text if c.isalnum())
 
 
+def sr_plus(r):
+    """A reservation's SR+ is {id, value, isValid}, or null, and RollFor rolls
+    with the number. isValid is not a gate: raidres's own option says it
+    decides next event's SR+ increase, not whether this one counts."""
+    sp = r.get("srPlus")
+    if isinstance(sp, dict):
+        sp = sp.get("value")
+    try:
+        return int(sp or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def build(ref):
     """-> RollFor's RaidResData, as a plain structure.
 
@@ -111,7 +124,7 @@ def build(ref):
         characters[name]["items"].append({
             "id": item["gameDbItemId"],
             "quality": item.get("quality", 4),
-            "sr_plus": r.get("srPlus") or 0,
+            "sr_plus": sr_plus(r),
         })
 
     hard = []

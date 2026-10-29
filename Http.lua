@@ -172,6 +172,15 @@ end
 
 --[[ The same conversion the watcher does, line for line, so a list comes out
      identical whichever way it was fetched. The tests hold the two to that. ]]
+--[[ A reservation's SR+ is {id, value, isValid}, or null, and RollFor rolls
+     with the number. isValid is not a gate here: raidres's own option says it
+     decides next event's SR+ increase, not whether this one counts. ]]
+local function srPlus(r)
+    local sp = r.srPlus
+    if type(sp) == "table" then return tonumber(sp.value) or 0 end
+    return tonumber(sp) or 0
+end
+
 function RB.Convert(ref, event, raid)
     local byItem = {}
     for _, it in ipairs(raid.raidItems or {}) do byItem[it.id] = it end
@@ -192,7 +201,7 @@ function RB.Convert(ref, event, raid)
             table.insert(chars[name].items, {
                 id = item.gameDbItemId,
                 quality = item.quality or 4,
-                sr_plus = r.srPlus or 0,
+                sr_plus = srPlus(r),
             })
         end
     end

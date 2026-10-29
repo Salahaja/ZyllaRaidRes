@@ -194,6 +194,19 @@ do
     checkSame("the list matches the watcher's", data, Expected_Data)
     checkSame("the counts match the watcher's", stats, Expected_Stats)
 
+    -- an SR+ event: raidres sends {id, value, isValid}; RollFor wants the number
+    local sr = RB.Convert("SRPLUS", RB.Json.decode(slurp("event_SRPLUS.json")), raid)
+    checkSame("an SR+ list matches the watcher's", sr, Expected_SrPlus)
+    local values = {}
+    for _, p in ipairs(sr.softreserves) do
+        for _, it in ipairs(p.items) do
+            if it.sr_plus ~= 0 then table.insert(values, it.sr_plus) end
+        end
+    end
+    table.sort(values)
+    check("SR+ reaches RollFor as numbers, validated or not", table.concat(values, ","), "10,20,30")
+    check("and none is 0, not a table", type(data.softreserves[1].items[1].sr_plus), "number")
+
     for _, id in ipairs({ 94, 100, 101 }) do
         local r = RB.Json.decode(slurp("raid_" .. id .. ".json"))
         checkSame("loot table " .. id .. " matches the watcher's", RB.ConvertRaid(r), Expected_Raids[id])
