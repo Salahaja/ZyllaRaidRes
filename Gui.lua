@@ -46,7 +46,8 @@ local RB = RaidResBridge
 local W = 680
 local ROW_H = 18
 local EDGE = 20                 -- inside the dialog border
-local BOX_TOP = 78              -- the boxes start here; their labels sit above
+local BOX_TOP = 84              -- the boxes start here; their labels, and the
+                                -- Loot box's Sort and Show, sit above
 local GAP = 18
 local P_W = 236                 -- players column
 local P_ROWS = 12
@@ -228,7 +229,48 @@ function RB.ItemMatches(it, search, class)
     return true
 end
 
---[[ One instance's loot, boss by boss, filtered.
+local SHARED = 999      -- raidres's place for loot more than one boss drops
+
+--[[ Does an item pass the Show menu? raidres's own rules: any one of the
+     kinds ticked will do, and "Hard reserved" also needs the item to be
+     hard-reserved. `show` is a set of the kind keys Http.lua's ItemTypes
+     gives (cloth, plate, weapon, ...) plus "hr". An item from a loot table
+     cached before kinds were kept matches no kind; the menu offers the
+     update that adds them. ]]
+function RB.ItemShown(it, show, hard)
+    if not show or not next(show) then return true end
+    if show.hr and not (hard and hard[it.g]) then return false end
+    local kinds = false
+    for k in pairs(show) do
+        if k ~= "hr" then
+            kinds = true
+            if it.t and string.find(" " .. it.t .. " ", " " .. k .. " ", 1, true) then
+                return true
+            end
+        end
+    end
+    return not kinds
+end
+
+local function byName(a, b)
+    local an, bn = string.lower(a.item.n or ""), string.lower(b.item.n or "")
+    if an ~= bn then return an < bn end
+    return a.at < b.at
+end
+local function byNameDown(a, b) return byName(b, a) end
+
+local function byPlace(a, b)
+    if a.place and b.place and a.place ~= b.place then return a.place < b.place end
+    return a.first < b.first
+end
+
+--[[ One instance's loot, filtered and sorted.
+
+     opts.sort "boss" (the default) is raidres's own order: boss by boss in
+     kill order, A to Z within each, and loot more than one boss drops under
+     a last "Shared" heading. A loot table cached before the kill order was
+     kept keeps its bosses in the order the table had them. "az" and "za" are
+     one list by name, with no headings.
 
      Flattened into rows with headers rather than nested, so the scroll offset
      stays a plain index into a list. A boss can be folded away like a zone in
@@ -237,29 +279,46 @@ end
 function RB.ItemRows(raidId, opts)
     local raid = (RaidResBridge_Raids or {})[raidId]
     if not raid then return {} end
-    local search = opts and opts.search
-    local class = opts and opts.class
-    local folded = (opts and opts.collapsed) or {}
+    opts = opts or {}
+    local search = opts.search
+    local folded = opts.collapsed or {}
     local searching = search and search ~= ""
-    local groups, order = {}, {}
-    for _, it in ipairs(raid.items or {}) do
-        if RB.ItemMatches(it, search, class) then
-            local boss = it.b or ""
-            if not groups[boss] then
-                groups[boss] = {}
-                table.insert(order, boss)
-            end
-            table.insert(groups[boss], it)
+    local found = {}
+    for i, it in ipairs(raid.items or {}) do
+        if RB.ItemMatches(it, search, opts.class) and RB.ItemShown(it, opts.show, opts.hard) then
+            table.insert(found, { item = it, at = i })
         end
     end
+
     local rows = {}
-    for _, boss in ipairs(order) do
-        local fold = tostring(raidId) .. ":" .. boss
+    if opts.sort == "az" or opts.sort == "za" then
+        table.sort(found, opts.sort == "az" and byName or byNameDown)
+        for _, f in ipairs(found) do table.insert(rows, { item = f.item }) end
+        return rows
+    end
+
+    local groups, order = {}, {}
+    for _, f in ipairs(found) do
+        local it = f.item
+        local shared = it.o == SHARED
+        local key = shared and "*shared" or (it.b or "")
+        local g = groups[key]
+        if not g then
+            g = { key = key, place = it.o, first = f.at, items = {},
+                  name = (shared and "Shared") or (key ~= "" and key) or "Elsewhere" }
+            groups[key] = g
+            table.insert(order, g)
+        end
+        table.insert(g.items, f)
+    end
+    table.sort(order, byPlace)
+    for _, g in ipairs(order) do
+        local fold = tostring(raidId) .. ":" .. g.key
         local closed = folded[fold] and not searching
-        table.insert(rows, { header = boss ~= "" and boss or "Elsewhere",
-                             fold = fold, collapsed = closed and true or false })
+        table.insert(rows, { header = g.name, fold = fold, collapsed = closed and true or false })
         if not closed then
-            for _, it in ipairs(groups[boss]) do table.insert(rows, { item = it }) end
+            table.sort(g.items, byName)
+            for _, f in ipairs(g.items) do table.insert(rows, { item = f.item }) end
         end
     end
     return rows
@@ -1280,6 +1339,148 @@ function RB.InitRaidMenu()
     UIDropDownMenu_AddButton(info)
 end
 
+-- ---------------------------------------------------------------------------
+-- Sorting the loot, and showing only some of it
+-- ---------------------------------------------------------------------------
+
+local SORTS = {
+    { "boss", "By boss", "Boss by boss in kill order, A to Z within each -- raidres's own order." },
+    { "az", "A to Z", "Every item by name, A to Z." },
+    { "za", "Z to A", "Every item by name, Z to A." },
+}
+
+-- raidres's item-select filters, by its names, in its order. HR spelled out.
+local KINDS = {
+    { "cloth", "Cloth" }, { "leather", "Leather" }, { "mail", "Mail" }, { "plate", "Plate" },
+    { "weapon", "Weapon/Shield" }, { "neck", "Neck" }, { "back", "Cape" }, { "ring", "Ring" },
+    { "trinket", "Trinket" }, { "profession", "Profession" }, { "class", "Class" },
+    { "hr", "Hard reserved" },
+}
+
+local function lootOptions()
+    RaidResBridge_Options = RaidResBridge_Options or {}
+    return RaidResBridge_Options
+end
+
+function RB.LootSort()
+    local s = RaidResBridge_Options and RaidResBridge_Options.lootSort
+    for i = 1, table.getn(SORTS) do
+        if SORTS[i][1] == s then return s end
+    end
+    return "boss"
+end
+
+function RB.LootShow()
+    return (RaidResBridge_Options and RaidResBridge_Options.lootShow) or {}
+end
+
+local function lootChanged()
+    if CloseDropDownMenus then CloseDropDownMenus() end
+    RB.ResetScroll(RB.gui and RB.gui.lScroll)
+    RB.Draw()
+end
+
+function RB.SetLootSort(how)
+    lootOptions().lootSort = how
+    lootChanged()
+end
+
+--- Tick or untick one kind; "all" clears them all.
+function RB.ToggleLootShow(kind)
+    local o = lootOptions()
+    if kind == "all" then
+        o.lootShow = nil
+    else
+        o.lootShow = o.lootShow or {}
+        o.lootShow[kind] = not o.lootShow[kind] or nil
+        if not next(o.lootShow) then o.lootShow = nil end
+    end
+    RB.ResetScroll(RB.gui and RB.gui.lScroll)
+    RB.Draw()
+end
+
+--- What the Show button says: "All items", one kind, or the first and how many more.
+function RB.LootShowLabel()
+    local show, first, n = RB.LootShow(), nil, 0
+    for i = 1, table.getn(KINDS) do
+        if show[KINDS[i][1]] then
+            n = n + 1
+            first = first or KINDS[i][2]
+        end
+    end
+    if n == 0 then return "All items" end
+    return first .. (n > 1 and (" +" .. (n - 1)) or "")
+end
+
+local function onPickSort()
+    RB.SetLootSort(this.value)
+end
+
+local function onPickShow()
+    if this.value == "update" then
+        if CloseDropDownMenus then CloseDropDownMenus() end
+        RB.FetchLoot()
+    else
+        RB.ToggleLootShow(this.value)
+    end
+end
+
+function RB.InitLootSortMenu()
+    local now = RB.LootSort()
+    local info = {}
+    info.text = "Sort the loot"
+    info.isTitle = 1
+    UIDropDownMenu_AddButton(info)
+    for i = 1, table.getn(SORTS) do
+        info = {}
+        info.text = SORTS[i][2]
+        info.value = SORTS[i][1]
+        info.func = onPickSort
+        info.checked = (SORTS[i][1] == now) and 1 or nil
+        info.tooltipTitle = SORTS[i][2]
+        info.tooltipText = SORTS[i][3]
+        UIDropDownMenu_AddButton(info)
+    end
+end
+
+--[[ Ticks stay open, so several kinds can be picked in one go, as on
+     raidres. A loot table cached before kinds were kept can't be filtered
+     by kind: the menu says so and offers the update. ]]
+function RB.InitLootShowMenu()
+    local show = RB.LootShow()
+    local raid = RB.raid and RaidResBridge_Raids and RaidResBridge_Raids[RB.raid]
+    local first = raid and raid.items and raid.items[1]
+    local kinds = not first or first.t ~= nil
+    local info = {}
+    info.text = "Show"
+    info.isTitle = 1
+    UIDropDownMenu_AddButton(info)
+    info = {}
+    info.text = "All items"
+    info.value = "all"
+    info.func = onPickShow
+    info.checked = (not next(show)) and 1 or nil
+    UIDropDownMenu_AddButton(info)
+    for i = 1, table.getn(KINDS) do
+        local k = KINDS[i][1]
+        info = {}
+        info.text = KINDS[i][2]
+        info.value = k
+        info.func = onPickShow
+        info.checked = show[k] and 1 or nil
+        info.keepShownOnClick = 1
+        info.disabled = (not kinds and k ~= "hr") and 1 or nil
+        UIDropDownMenu_AddButton(info)
+    end
+    if not kinds then
+        info = {}
+        info.text = hex(GREEN, "Update loot tables to show by kind")
+        info.value = "update"
+        info.func = onPickShow
+        UIDropDownMenu_AddButton(info)
+    end
+end
+
 local function buildLoot(f)
     local lb = box(f, "Loot", L_W, L_H)
     lb:SetPoint("TOPLEFT", f, "TOPLEFT", L_X, -BOX_TOP)
@@ -1311,6 +1512,27 @@ local function buildLoot(f)
     end)
     tip(f.classOnly, "Usable only",
         "Hide loot the selected player's class can't use, such as other classes' tier pieces.")
+
+    -- above the box at its right, where the Reserves box keeps Match: how
+    -- the loot is sorted, and which kinds of it show
+    f.lootShow = button(lb, "All items", 96, 18, "ZyllaRaidResLootShow")
+    f.lootShow:SetPoint("BOTTOMRIGHT", lb, "TOPRIGHT", -4, 1)
+    f.lootShow:SetScript("OnClick", function()
+        ToggleDropDownMenu(1, nil, RB.gui.lootShowMenu, "ZyllaRaidResLootShow", 0, 0)
+    end)
+    tip(f.lootShow, "Show",
+        "Only some kinds of loot: cloth, plate, weapons, rings... Tick several to see any of them.")
+    f.lootShowMenu = CreateFrame("Frame", "ZyllaRaidResLootShowMenu", f, "UIDropDownMenuTemplate")
+    UIDropDownMenu_Initialize(f.lootShowMenu, RB.InitLootShowMenu, "MENU")
+
+    f.lootSort = button(lb, "By boss", 80, 18, "ZyllaRaidResLootSort")
+    f.lootSort:SetPoint("RIGHT", f.lootShow, "LEFT", -4, 0)
+    f.lootSort:SetScript("OnClick", function()
+        ToggleDropDownMenu(1, nil, RB.gui.lootSortMenu, "ZyllaRaidResLootSort", 0, 0)
+    end)
+    tip(f.lootSort, "Sort", "By boss, as raidres lists it, or by name.")
+    f.lootSortMenu = CreateFrame("Frame", "ZyllaRaidResLootSortMenu", f, "UIDropDownMenuTemplate")
+    UIDropDownMenu_Initialize(f.lootSortMenu, RB.InitLootSortMenu, "MENU")
 
     f.lScroll = scrollFrame(lb, "ZyllaRaidResLootScroll", inner, L_ROWS, L_LIST_TOP)
     f.lRows = {}
@@ -2260,16 +2482,31 @@ local function drawLoot(f, s, sel)
     UIDropDownMenu_SetSelectedValue(f.raidDrop, RB.raid)
     UIDropDownMenu_SetText(raid.name, f.raidDrop)
 
+    local sort, show = RB.LootSort(), RB.LootShow()
+    for i = 1, table.getn(SORTS) do
+        if SORTS[i][1] == sort then f.lootSort:SetText(SORTS[i][2]) end
+    end
+    f.lootShow:SetText(RB.LootShowLabel())
+
     local rows = RB.ItemRows(RB.raid, {
         search = RB.search,
         class = (RB.classOnly and cls) or nil,
         collapsed = RB.collapsed,
+        sort = sort,
+        show = show,
+        hard = s.hard,
     })
     local n = table.getn(rows)
     if n == 0 then
-        f.lEmpty:SetText((RB.search and RB.search ~= "")
-            and ("Nothing in " .. raid.name .. " matches \"" .. RB.search .. "\".")
-            or "Nothing here for that class.")
+        local why
+        if RB.search and RB.search ~= "" then
+            why = "Nothing in " .. raid.name .. " matches \"" .. RB.search .. "\"."
+        elseif next(show) then
+            why = "No loot here matches Show: " .. RB.LootShowLabel() .. "."
+        else
+            why = "Nothing here for that class."
+        end
+        f.lEmpty:SetText(why)
         f.lEmpty:Show()
     else
         f.lEmpty:Hide()

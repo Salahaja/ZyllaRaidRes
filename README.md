@@ -317,9 +317,24 @@ and on pfUI's square one. Where it sits is saved. It uses the client's
 tracking-button border, or pfUI's flat square in pfUI's look. pfUI's
 minimap-button bar can gather it like any other button.
 
-**The loot** is raidres's own table for the instance, grouped by boss and
-coloured by quality, with item icons once the game has seen an item. Who holds
-each item is shown beside it.
+**The loot** is raidres's own table for the instance, in raidres's own order:
+boss by boss in kill order, A to Z within each boss. Loot that more than one
+boss drops comes last, under *Shared*. Items are coloured by quality, with
+icons once the game has seen an item, and who holds each item is shown beside
+it.
+- **Sort** (above the loot, on the right): *By boss*, *A to Z* or *Z to A*.
+  The last two give one list with no boss headings.
+- **Show** (beside Sort): only some kinds of loot, using the same filters as
+  raidres's item picker: *Cloth*, *Leather*, *Mail*, *Plate*,
+  *Weapon/Shield*, *Neck*, *Cape*, *Ring*, *Trinket*, *Profession*,
+  *Class* and *Hard reserved*. Tick several to see any of them; the menu stays
+  open while you tick. The button says what's showing, e.g. *Plate +1*. Each
+  kind matches the same words in the item's raidres tooltip that the site
+  matches, so a kind shows the same items here as there. Both choices are
+  remembered.
+
+  Loot tables cached by an older version don't have kinds yet. *Show* says so and
+  offers *Update loot tables*.
 - **It picks the raid for you,** and the newest signal wins:
   1. **The raid your group is in.** Yours if you're inside one, otherwise
      wherever most of your raid already is. One member inside is enough, so
@@ -516,8 +531,8 @@ failure.
 
 ```bash
 lua tools/test_bridge.lua   # lists, the merge, typed reserves, names   (139)
-lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (118)
-lua tools/test_gui.lua      # the window, minimap button, RollFor box   (397)
+lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (131)
+lua tools/test_gui.lua      # the window, minimap button, RollFor box   (433)
 python tools/test_lock.py   # reserving on raidres, in a throwaway Chrome (41)
 lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Minimap.lua Chat.lua
 ```

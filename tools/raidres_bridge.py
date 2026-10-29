@@ -29,6 +29,7 @@ Usage:
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -198,6 +199,55 @@ RAID_SWEEP = list(range(90, 125))
 GAME = "TURTLE"
 
 
+# raidres's item-select filters, in its order: each matches an item whose
+# tooltip has one of these words as a whole tag's text (">Plate</"). Copied
+# from the site's own list, so "Plate" shows here exactly what it shows there.
+# Http.lua holds the same list for the in-game fetch; Gui.lua names them.
+ITEM_TYPES = [
+    ("cloth", ["Cloth"]),
+    ("leather", ["Leather"]),
+    ("mail", ["Mail"]),
+    ("plate", ["Plate"]),
+    ("weapon", ["Arrow", "Bullet", "Held In Off-Hand", "Main Hand", "Off Hand",
+                "One-hand", "Ranged", "Thrown", "Two-hand"]),
+    ("neck", ["Neck"]),
+    ("back", ["Back"]),
+    ("ring", ["Finger"]),
+    ("trinket", ["Trinket"]),
+    ("profession", ["Enchanting Bag", "Explosive", "Fishing Pole", "Herb Bag"] +
+     ["Requires " + p for p in ("Alchemy", "Blacksmithing", "Cooking", "Enchanting",
+                                "Engineering", "First Aid", "Fishing", "Herbalism",
+                                "Jewelcrafting", "Leatherworking", "Mining",
+                                "Skinning", "Tailoring")]),
+    ("class", ["Ammo Pouch", "Bag", "Book", "Idol", "Libram", "Part", "Quiver",
+               "Reagent", "Relic", "Soul Bag", "Totem", "Classes: "]),
+]
+# A "Requires" line that isn't a level: a profession recipe. Those match only
+# their "Requires <profession>" words; everything else only the others.
+REQUIRES_OTHER = re.compile(r">requires (?!level (?:[1-9]|[1-9]\d|1[01]\d|120)\b)")
+SHARED = 999    # raidres's position for loot more than one boss drops
+
+
+def item_types(tooltip):
+    """The ITEM_TYPES keys an item's tooltip matches, space-separated."""
+    if not isinstance(tooltip, str):
+        return ""
+    tt = tooltip.lower()
+    other = bool(REQUIRES_OTHER.search(tt))
+    out = []
+    for key, words in ITEM_TYPES:
+        for word in words:
+            w = word.lower()
+            if "requires " in w:
+                hit = other and (">%s</" % w in tt or ">%s (" % w in tt)
+            else:
+                hit = not other and ">%s</" % w in tt
+            if hit:
+                out.append(key)
+                break
+    return " ".join(out)
+
+
 def fetch_raids():
     raids = {}
     for rid in RAID_SWEEP:
@@ -208,15 +258,21 @@ def fetch_raids():
         if raid.get("game") != GAME:
             continue
         bosses = dict((b["id"], b.get("name", "?")) for b in raid.get("raidBosses", []))
+        places = dict((b["id"], b.get("position", 0)) for b in raid.get("raidBosses", []))
         items = []
         for it in raid.get("raidItems", []):
-            first = (it.get("raidBosses") or [None])[0]
+            dropped_by = it.get("raidBosses") or []
+            first = (dropped_by or [None])[0]
             items.append({
                 "g": it.get("gameDbItemId"),
                 "n": it.get("name", "?"),
                 "q": it.get("quality", 4),
                 "b": bosses.get(first, ""),
                 "c": it.get("characterClasses") or [],
+                # where it sorts: its boss's place in the kill order, or
+                # SHARED when more than one boss drops it, as on raidres
+                "o": SHARED if len(dropped_by) > 1 else places.get(first, SHARED),
+                "t": item_types(it.get("tooltip")),
             })
         raids[rid] = {"name": raid.get("name", "?"), "items": items}
         print("  raid %-4d %-30s %3d items" % (rid, raids[rid]["name"], len(items)))

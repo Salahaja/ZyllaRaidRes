@@ -199,6 +199,28 @@ do
         checkSame("loot table " .. id .. " matches the watcher's", RB.ConvertRaid(r), Expected_Raids[id])
     end
 
+    --[[ The site's "Requires" rule, which Lua writes out by hand for want of
+         a look-ahead, on the corners the loot tables don't reach. Each answer
+         is what raidres_bridge.py's regex gives. ]]
+    local TYPES = {
+        { "<b>X</b><span>Requires Level 60</span><td>Head</td><th>Plate</th>", "plate" },
+        { "<span>Requires Tailoring (300)</span><span>Cloth</span>", "profession" },
+        { "<span>Requires Tailoring</span><span>Cloth</span>", "profession" },
+        { "<span>Requires Level 0</span><span>Plate</span>", "" },
+        { "<span>Requires Level 060</span><span>Plate</span>", "" },
+        { "<span>Requires Level 121</span><span>Plate</span>", "" },
+        { "<span>Requires Level 60x</span><span>Plate</span>", "" },
+        { "<span>Requires Level 120</span><span>Requires Alchemy (250)</span>", "profession" },
+        { "<span>Classes: </span><span>Libram</span>", "class" },
+        { "<td>Back</td><th>Cloth</th>", "cloth back" },
+        { "<td>Two-hand</td><th>Mace</th>", "weapon" },
+        { "no tags at all", "" },
+    }
+    for i = 1, table.getn(TYPES) do
+        check("item types: " .. TYPES[i][1], RB.ItemTypes(TYPES[i][1]), TYPES[i][2])
+    end
+    check("no tooltip, no types", RB.ItemTypes(nil), "")
+
     -- Every id must be a plausible WoW item, not raidres's own numbering.
     local bad = 0
     for _, p in ipairs(data.softreserves) do
