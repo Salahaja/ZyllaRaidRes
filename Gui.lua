@@ -278,6 +278,7 @@ function RB.Snapshot()
     local merged = RB.Merged()
     local s = { merged = merged, ref = ref, holders = {}, items = {},
                 web = {}, typed = {}, hard = {}, typedCount = 0 }
+    s.locked, s.lockAt = RB.LockState(ref)
 
     -- Who Names.lua paired up, and who is still loose on either side.
     s.inRaid = (GetNumRaidMembers and GetNumRaidMembers() or 0) > 0
@@ -1154,7 +1155,7 @@ function RB.SkinForPfUI(f)
             boxes[i]:SetBackdrop(nil)
             api.CreateBackdrop(boxes[i], nil, true)
         end
-        local buttons = { f.fetch, f.send, f.clear, f.lEmptyButton, f.matchBtn }
+        local buttons = { f.fetch, f.send, f.clear, f.lEmptyButton, f.matchBtn, f.lockBtn }
         for i = 1, table.getn(buttons) do
             if api.SkinButton then api.SkinButton(buttons[i]) end
         end
@@ -1234,7 +1235,7 @@ function RB.BuildGui()
     local linkLabel = text(f, "GameFontNormalSmall")
     linkLabel:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, -38)
     linkLabel:SetText("Raidres link")
-    f.link = editBox(f, "ZyllaRaidResLink", 250, "Paste a link or code")
+    f.link = editBox(f, "ZyllaRaidResLink", 214, "Paste a link or code")
     f.link:SetPoint("LEFT", linkLabel, "RIGHT", 12, 0)
     f.link:SetMaxLetters(120)
     f.link:SetScript("OnEnterPressed", function() RB.FetchFromBox() end)
@@ -1247,8 +1248,23 @@ function RB.BuildGui()
 
     f.status = text(f, "GameFontHighlightSmall")
     f.status:SetPoint("LEFT", f.fetch, "RIGHT", 10, 0)
-    f.status:SetWidth(W - EDGE - (EDGE + 4 + 66 + 12 + 250 + 6 + 70 + 10))
+    f.status:SetWidth(W - EDGE - (EDGE + 4 + 66 + 12 + 214 + 6 + 70 + 10) - 96 - 80 - 6)
     f.status:SetHeight(ROW_H)
+
+    f.lockState = text(f, "GameFontHighlightSmall")
+    f.lockState:SetPoint("RIGHT", f, "TOPRIGHT", -EDGE - 96 - 6, -35 + ROW_H / 2)
+    f.lockState:SetJustifyH("RIGHT")
+    f.lockState:Hide()
+
+    f.lockBtn = button(f, "", 96)
+    f.lockBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -EDGE, -35)
+    f.lockBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    f.lockBtn:SetScript("OnClick", function()
+        if arg1 == "RightButton" then RB.LockRightClick() else RB.LockClick() end
+    end)
+    f.lockBtn:SetScript("OnEnter", function() RB.LockTooltip(this) end)
+    f.lockBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    f.lockBtn:Hide()
 
     buildPlayers(f)
     buildLoot(f)
@@ -1296,6 +1312,7 @@ function RB.BuildGui()
             box:SetText("https://raidres.top/res/" .. s.ref)
         end
         syncPlaceholder(box)
+        if RB.MaybePollLock then RB.MaybePollLock() end
     end)
     f:SetScript("OnHide", function()
         if PlaySound then PlaySound("igMainMenuClose") end
@@ -1322,6 +1339,15 @@ function RB.BuildGui()
             this.notice = nil
             RB.DrawHint()
         end
+        -- Is it still locked? A look every 30s, only while this is open.
+        if RB.MaybePollLock then RB.MaybePollLock() end
+        -- And a state nobody has confirmed for a few minutes stops being shown
+        -- as fact, without waiting for something else to redraw.
+        local label = RB.LockLabel(RB.gui.snap)
+        if label ~= this.lockLabel then
+            this.lockLabel = label
+            RB.DrawStatus()
+        end
         --[[ Raid members change zones without telling us, so every few
              seconds look at where they are. A full redraw only happens when
              the answer changes -- which raid, or how many are in it. ]]
@@ -1344,6 +1370,126 @@ end
 -- Drawing it
 -- ---------------------------------------------------------------------------
 
+local STALE = 150   -- seconds without a look before the lock state is doubted
+
+--[[ "locked", "unlocked", or "unknown". With the DLL the state is re-read
+     every half minute, so one that hasn't been confirmed for a few minutes is
+     doubted rather than shown as fact. Without it the state is as of the last
+     fetch and can't be refreshed, so it stands. ]]
+function RB.LockLabel(s)
+    if not s or s.locked == nil then return "unknown" end
+    if RB.Http and RB.Http() and s.lockAt and GetTime() - s.lockAt > STALE then return "unknown" end
+    return s.locked and "locked" or "unlocked"
+end
+
+function RB.LockRightClick()
+    local f = RB.gui
+    if not f then return end
+    local s = f.snap
+    local ref = s and s.ref
+    if not ref or ref == "manual" then return end
+    if not (RB.LockControlReady and RB.LockControlReady()) then
+        RB.Notice("enable lock control first: /rrb lockcontrol on")
+        return
+    end
+    if RB.SendOpenCommand(ref) then
+        RB.Notice("opening in Chrome...")
+    else
+        RB.Notice("can't reach the helper script. Is Nampower loaded?")
+    end
+end
+
+function RB.LockClick()
+    local f = RB.gui
+    if not f then return end
+    local s = f.snap
+    local ref = s and s.ref
+
+    if RB.LockControlReady and RB.LockControlReady() and ref and ref ~= "manual" then
+        if RB.lockPending then
+            RB.Notice("already sending...")
+            return
+        end
+        local state = RB.LockLabel(s)
+        if state == "unknown" then
+            if RB.Http and RB.Http() then
+                if RB.MaybePollLock(true) then RB.Notice("checking raidres...") end
+            else
+                RB.Notice("lock state unknown. Fetch the list first.")
+            end
+            return
+        end
+        local want = not s.locked
+        if RB.SendLockCommand(ref, want) then
+            RB.Notice(want and "locking..." or "unlocking...")
+            RB.DrawStatus()
+        else
+            RB.Notice("can't reach the lock script. Is Nampower loaded?")
+        end
+        return
+    end
+
+    if RB.Http and RB.Http() then
+        if RB.MaybePollLock(true) then
+            RB.Notice("checking raidres...")
+        else
+            RB.Notice("already checking.")
+        end
+    else
+        RB.Notice("press Fetch to check again.")
+    end
+end
+
+function RB.LockTooltip(owner)
+    local f = RB.gui
+    local s = f and f.snap
+    if not s or not s.ref then return end
+    local state = RB.LockLabel(s)
+    GameTooltip:SetOwner(owner, "ANCHOR_BOTTOMLEFT")
+    GameTooltip:SetText("Raidres list " .. s.ref, 1, 0.82, 0)
+    if state == "locked" then
+        GameTooltip:AddLine("Locked: nobody can change their reserves on raidres.", 0.13, 1, 0.13, 1)
+    elseif state == "unlocked" then
+        GameTooltip:AddLine("Unlocked: people can still change their reserves on raidres.", 1, 0.82, 0, 1)
+    else
+        GameTooltip:AddLine("Not known right now.", 0.5, 0.5, 0.5, 1)
+    end
+    if RB.LockControlReady and RB.LockControlReady() then
+        if RB.lockPending then
+            GameTooltip:AddLine("Sending to the lock script...", 1, 0.82, 0, 1)
+        elseif state ~= "unknown" then
+            GameTooltip:AddLine("Click to " .. (s.locked and "unlock" or "lock") .. " it.", 1, 1, 1, 1)
+        else
+            GameTooltip:AddLine("Click to check the state.", 0.5, 0.5, 0.5, 1)
+        end
+        GameTooltip:AddLine("Right-click to open on raidres in Chrome.", 0.5, 0.5, 0.5, 1)
+        GameTooltip:AddLine("Lock control on (/rrb lockcontrol). Needs the helper script.", 0.5, 0.5, 0.5, 1)
+    elseif RB.Http and RB.Http() then
+        if s.lockAt then
+            GameTooltip:AddLine(string.format("Checked %.0f seconds ago; looks again every 30 while this window is open.",
+                GetTime() - s.lockAt), 0.5, 0.5, 0.5, 1)
+        else
+            GameTooltip:AddLine("As of the last fetch; checking now.", 0.5, 0.5, 0.5, 1)
+        end
+        GameTooltip:AddLine("Click to check now.", 0.5, 0.5, 0.5)
+    else
+        GameTooltip:AddLine("As of the last fetch. Press Fetch to check again.", 0.5, 0.5, 0.5, 1)
+    end
+    if not (RB.LockControlReady and RB.LockControlReady()) then
+        GameTooltip:AddLine("Lock or unlock it on the raidres site.", 0.5, 0.5, 0.5, 1)
+    end
+    GameTooltip:Show()
+end
+
+--- The list changed state on raidres while we were looking.
+function RB.OnLockChanged(locked)
+    if locked then
+        RB.Notice("the list was locked on raidres.")
+    else
+        RB.Notice("the list was unlocked on raidres: reserves can change again.")
+    end
+end
+
 function RB.DrawStatus()
     local f = RB.gui
     if not f then return end
@@ -1358,12 +1504,36 @@ function RB.DrawStatus()
         local meta = s.merged.metadata or {}
         local where = (s.instance and raids[s.instance] and raids[s.instance].name)
             or (meta.instances and meta.instances[1]) or "?"
-        line = hex(WHITE, s.ref) .. hex(GREY, "  " .. where .. ", " ..
-            table.getn(s.merged.softreserves or {}) .. " on the list")
+        line = hex(WHITE, s.ref) .. hex(GREY, "  " .. where)
     else
         line = hex(GREY, "No list yet. Paste a link, or add reserves by hand.")
     end
     f.status:SetText(line)
+
+    -- The lock state indicator and button: only for a list from raidres.
+    if s and s.ref and s.ref ~= "manual" then
+        local state = RB.LockLabel(s)
+        f.lockState:SetText(state == "locked" and hex(GREEN, "Locked")
+            or state == "unlocked" and hex(GOLD, "Unlocked") or hex(GREY, "Lock ?"))
+        f.lockState:Show()
+        if RB.lockPending then
+            f.lockBtn:SetText("...")
+        elseif RB.LockControlReady and RB.LockControlReady() then
+            if state == "locked" then
+                f.lockBtn:SetText("Unlock")
+            elseif state == "unlocked" then
+                f.lockBtn:SetText("Lock")
+            else
+                f.lockBtn:SetText("Check")
+            end
+        else
+            f.lockBtn:SetText("Check")
+        end
+        f.lockBtn:Show()
+    else
+        f.lockState:Hide()
+        f.lockBtn:Hide()
+    end
 
     if RB.Http and RB.Http() then
         f.fetch.tipBody = "Fetches the list in game, through RaidResHttp.dll."

@@ -204,7 +204,7 @@ With pfUI loaded, it's skinned the way pfUI skins every Blizzard window.
                       .-----------------------.
 +---------------------|     Zylla RaidRes     |---------------------- [x] +
 |                     '-----------------------'                           |
-|  Raidres link [ https://raidres.top/res/XXXXXX ] [Fetch]  XXXXXX  ZG, 12  |
+|  Raidres link [ https://raidres.top/res/XXXXXX ] [Fetch] XXXXXX ZG [Locked] |
 |                                                                           |
 |  Players  12 of 15 done   [ ] Missing only   Loot                         |
 |  +--------------------------------------+   +----------------------------------+ |
@@ -224,6 +224,14 @@ With pfUI loaded, it's skinned the way pfUI skins every Blizzard window.
 
 1. **Paste the link** at the top and press Fetch or Enter. The box keeps the
    last list's link, so fetching again to refresh it is one click.
+   The button at the right shows whether raidres has the list **locked**
+   (green) or **unlocked** (gold), or *Lock ?* when it isn't known. With
+   RaidResHttp.dll it looks again every 30 seconds while the window is open,
+   so you see a late joiner's unlock and your own re-lock without leaving
+   the game, and the window says when it changes. Click the button to check
+   right now. Without the DLL it shows the state as of the last fetch.
+   It only *shows* the lock: locking and unlocking are done on the raidres
+   site.
 2. **The players are your raid**, each counted against the event's own limit:
    red with nothing, yellow part way, green when done. Whoever still has
    reserves to make is at the top. People on the list who aren't in your group
@@ -294,6 +302,33 @@ both sets of items, and an item on both sides isn't doubled.
 A list with nothing fetched at all is fine. A raid organised entirely in chat
 is an ordinary case.
 
+## Locking and unlocking from in game
+
+With `RaidResHttp.dll` the lock button shows the state. Without it, the
+state is whatever the last fetch saw. Either way, **locking and unlocking
+on raidres normally means opening the site.**
+
+If you'd rather do it from in game, a small helper script can do it through
+Chrome:
+
+1. **Python 3** and **Chrome** (or Chromium) on the same machine.
+2. Start Chrome once with `tools\start_chrome_cdp.bat`, or add
+   `--remote-debugging-port=9222` to your Chrome shortcut. Sign into
+   raidres in that Chrome.
+3. Run the lock watcher: `python tools/raidres_lock.py watch`.
+4. In game: `/rrb lockcontrol on`.
+
+The lock button now **toggles** lock/unlock instead of only checking. The
+script talks to Chrome through the DevTools Protocol, telling it to call
+the same API the raidres site itself uses. **Chrome manages its own
+cookies; the script never sees, stores or touches your session.** Nothing
+leaves your machine except the same HTTPS request Chrome would send if you
+clicked the button on the site.
+
+The setting is saved (`/rrb lockcontrol` to check, `off` to turn it back).
+Anyone without the script running gets the same read-only lock button as
+before, with no errors.
+
 ## Commands
 
 | | |
@@ -301,6 +336,7 @@ is an ordinary case.
 | `/rrb` | open or close the window |
 | `/rrb <link>` | fetch that list and import it |
 | `/rrb load` | import what was fetched, plus anything typed |
+| `/rrb lockcontrol` | toggle in-game lock/unlock (needs the helper script) |
 | `/rrb help` | the commands, and how it's fetching |
 | `/rrb debug` | what RaidResHttp.dll is doing right now: requests talking, queued, and the oldest one's age |
 
@@ -312,9 +348,9 @@ Run with Lua 5.x from anywhere. Each prints its checks and exits non-zero on a
 failure.
 
 ```bash
-lua tools/test_bridge.lua   # lists, the merge, typed reserves, names   (117)
-lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (82)
-lua tools/test_gui.lua      # the window, chat links, matching, clicked (247)
+lua tools/test_bridge.lua   # lists, the merge, typed reserves, names   (139)
+lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (116)
+lua tools/test_gui.lua      # the window, chat links, matching, clicked (288)
 lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Chat.lua
 ```
 

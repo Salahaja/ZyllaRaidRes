@@ -548,5 +548,73 @@ for _, pl in ipairs(players) do
 end
 check("and the window lists them once", seen, 1)
 
+----------------------------------------------------------------------
+-- is the list locked on raidres?
+----------------------------------------------------------------------
+GetTime = function() return 100 end
+RB = freshWorld()
+local lockFx = io.open(ROOT .. "tools/fixtures/RaidResBridge_data.lua")
+local lockText = lockFx:read("*a")
+lockFx:close()
+check("the fixture says locked", string.find(lockText, "RaidResBridge_Locked = true", 1, true) ~= nil, true)
+FILES["RaidResBridge_data.lua"] = lockText
+check("nothing is known before the file is read", RB.LockState("DEMO42"), nil)
+RB.Read()
+check("the file's lock line is read", RB.LockState("DEMO42"), true)
+check("for the list it belongs to, however it's cased", RB.LockState("demo42"), true)
+check("and for no other", RB.LockState("OTHER1"), nil)
+check("a manual-only list has no lock to speak of", RB.LockState("manual"), nil)
+RB.SetLock("manual", true)
+check("even if one were recorded for it", RB.LockState("manual"), nil)
+RB.lockInfo = nil
+check("neither does no list", RB.LockState(nil), nil)
+local _, checkedAt = RB.LockState("DEMO42")
+check("from a file it has no 'checked' time", checkedAt, nil)
+
+FILES["RaidResBridge_data.lua"] = string.gsub(lockText, "RaidResBridge_Locked = true", "RaidResBridge_Locked = false")
+RB.Read()
+check("unlocked is read as unlocked, not unknown", RB.LockState("DEMO42"), false)
+
+--[[ A file from an older watcher has no lock line. The value left by the
+     file before it must not be read as this one's. ]]
+FILES["RaidResBridge_data.lua"] = string.gsub(lockText, "RaidResBridge_Locked = true\n", "")
+check("the line is really gone from this one", string.find(FILES["RaidResBridge_data.lua"], "Locked", 1, true), nil)
+RB.Read()
+check("a file without it is unknown", RB.LockState("DEMO42"), nil)
+
+--[[ Only a real true or false counts. An event that doesn't say is not an
+     unlocked one. ]]
+FILES["RaidResBridge_data.lua"] = string.gsub(lockText, "RaidResBridge_Locked = true", 'RaidResBridge_Locked = "yes"')
+RB.Read()
+check("anything but a boolean is unknown", RB.LockState("DEMO42"), nil)
+
+RB.SetLock("DEMO42", "locked")
+check("and a non-boolean is never recorded", RB.LockState("DEMO42"), nil)
+local told
+RB.OnLockChanged = function(l) told = l end
+RB.SetLock("DEMO42", true)
+check("the first sighting is not a change", told, nil)
+RB.SetLock("DEMO42", true)
+check("nor is the same again", told, nil)
+RB.SetLock("DEMO42", false)
+check("unlocking is announced", told, false)
+RB.SetLock("DEMO42", true)
+check("and locking", told, true)
+told = nil
+RB.SetLock("OTHER2", false)
+check("a different list's state is not a change in this one's", told, nil)
+check("it has its own", RB.LockState("OTHER2"), false)
+-- One list is active at a time, so only its state is kept.
+check("and the earlier list's is no longer held", RB.LockState("DEMO42"), nil)
+
+-- A change since the file was written is a change too.
+RB = freshWorld()
+FILES["RaidResBridge_data.lua"] = lockText
+RB.Read()
+told = nil
+RB.OnLockChanged = function(l) told = l end
+RB.SetLock("DEMO42", false)
+check("unlocked since the file was written is announced", told, false)
+
 print(string.format("\n%d checks, %d failed\n", checks, failures))
 if failures > 0 then os.exit(1) end

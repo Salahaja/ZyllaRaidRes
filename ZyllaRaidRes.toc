@@ -5,7 +5,7 @@
 ## Version: 1.3.0
 ## X-Website: https://github.com/Salahaja/ZyllaRaidRes
 ## OptionalDeps: RollFor
-## SavedVariables: RaidResBridge_Manual, RaidResBridge_Limit, RaidResBridge_Names
+## SavedVariables: RaidResBridge_Manual, RaidResBridge_Limit, RaidResBridge_Names, RaidResBridge_LockControl
 
 RaidResBridge.lua
 Http.lua

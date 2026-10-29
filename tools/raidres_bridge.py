@@ -178,6 +178,10 @@ def write_reply(ref, data, stats):
         % (stats["raid"], stats["players"], stats["reservations"],
            lua_literal(data), lua_literal(ref),
            lua_literal(stats.get("limit") or 2)))
+    # Whether raidres has the list locked, for the window's badge. Left out
+    # when the event doesn't say: that reads back as unknown, not unlocked.
+    if isinstance(stats.get("locked"), bool):
+        body += "RaidResBridge_Locked = %s\n" % lua_literal(stats["locked"])
     path = os.path.join(CUSTOM, REPLY)
     io.open(path, "w", encoding="utf-8", newline="\n").write(body)
     return path

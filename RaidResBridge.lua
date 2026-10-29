@@ -133,7 +133,10 @@ function RB.Read()
     --[[ Fetched in game but not written down -- no file API, or the write
          failed. The file would hand back an older list, or none. ]]
     local mem = RB.fetched
-    if mem and mem.unsaved then return mem.data, nil, mem.ref end
+    if mem and mem.unsaved then
+        RB.activeRef = mem.ref
+        return mem.data, nil, mem.ref
+    end
     if not RB.FileAPI() then return nil, "Nampower's file API is missing" end
     local ok, text = pcall(ReadCustomFile, RB.REPLY)
     if not ok or type(text) ~= "string" or text == "" then
@@ -141,11 +144,55 @@ function RB.Read()
     end
     local chunk = loadstring(text)
     if not chunk then return nil, "the fetched file will not parse" end
+    --[[ Cleared first: a file from an older watcher has no lock line, and
+         the value left by the file before it would be read as this one's. ]]
+    RaidResBridge_Locked = nil
     local ran = pcall(chunk)
     if not ran or type(RaidResBridge_Data) ~= "table" then
         return nil, "the fetched file held nothing usable"
     end
+    RB.activeRef = RaidResBridge_Ref
     return RaidResBridge_Data, nil, RaidResBridge_Ref
+end
+
+-- ---------------------------------------------------------------------------
+-- Is the list locked on raidres?
+--
+-- Read-only: raidres's public event page says so (`locked`), and that is all
+-- this knows. It comes from the last fetch, from the file the watcher left, or
+-- -- with the DLL -- from a look every half minute while the window is open.
+-- ---------------------------------------------------------------------------
+
+local function sameRef(a, b)
+    return a and b and string.lower(a) == string.lower(b)
+end
+
+--[[ Record what raidres says. `locked` must be a real true/false: an event
+     that doesn't say is "unknown", not "unlocked". A change from what was
+     known for this same list is announced. ]]
+function RB.SetLock(ref, locked)
+    if type(locked) ~= "boolean" or not ref then return end
+    local was
+    local info = RB.lockInfo
+    if info and sameRef(info.ref, ref) then
+        was = info.locked
+    elseif sameRef(RaidResBridge_Ref, ref) and type(RaidResBridge_Locked) == "boolean" then
+        was = RaidResBridge_Locked
+    end
+    RB.lockInfo = { ref = ref, locked = locked, at = GetTime() }
+    if was ~= nil and was ~= locked and RB.OnLockChanged then RB.OnLockChanged(locked) end
+end
+
+--[[ locked (true, false or nil for unknown), and when it was last checked
+     (GetTime, or nil when it only comes from the file). ]]
+function RB.LockState(ref)
+    if not ref or ref == "" or ref == "manual" then return nil end
+    local info = RB.lockInfo
+    if info and sameRef(info.ref, ref) then return info.locked, info.at end
+    if sameRef(RaidResBridge_Ref, ref) and type(RaidResBridge_Locked) == "boolean" then
+        return RaidResBridge_Locked, nil
+    end
+    return nil
 end
 
 --[[ The cached loot tables, loaded on demand.
@@ -290,6 +337,7 @@ SlashCmdList["RAIDRESBRIDGE"] = function(msg)
             "needs reserves, and add them by hand.")
         say("|cffffffff/rrb <raidres link>|r fetches a list and imports it.")
         say("|cffffffff/rrb load|r imports what was fetched, plus anything typed.")
+        say("|cffffffff/rrb lockcontrol|r toggle locking and unlocking from in game (needs the helper script).")
         if RB.Http and RB.Http() then
             say("|cff888888Fetching in game (RaidResHttp.dll is loaded).|r")
         else
@@ -299,6 +347,22 @@ SlashCmdList["RAIDRESBRIDGE"] = function(msg)
         if RB.loaded then
             say("|cff888888last imported: " .. RB.loaded .. "|r")
         end
+        return
+    end
+
+    if cmd == "lockcontrol" then
+        local _, _, arg = string.find(msg, "lockcontrol%s+(%S+)")
+        if arg == "on" or arg == "1" then
+            RaidResBridge_LockControl = true
+            say("Lock control |cff00ff00enabled|r. The lock button will lock and unlock via the helper script.")
+        elseif arg == "off" or arg == "0" then
+            RaidResBridge_LockControl = false
+            say("Lock control |cffff5179disabled|r. The lock button only checks the state.")
+        else
+            local state = RaidResBridge_LockControl and "|cff00ff00on|r" or "|cffff5179off|r"
+            say("Lock control is " .. state .. ". |cffffffff/rrb lockcontrol on|r or |cffffffffoff|r.")
+        end
+        if RB.DrawStatus then RB.DrawStatus() end
         return
     end
 

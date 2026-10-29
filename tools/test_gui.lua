@@ -61,11 +61,14 @@ local function fire(w, script, a1)
     this, arg1 = oldThis, oldArg
 end
 
+local ALLFRAMES = {}   -- every frame, so a clock can run their OnUpdate
+
 local function new(kind, name, parent)
     local w = setmetatable({ kind = kind, name = name, parent = parent, shown = true,
         scripts = {}, txt = "", alpha = 1, enabled = true,
         level = parent and (parent.level + 1) or 0 }, meta)
     if name then NAMED[name] = w; _G[name] = w end
+    table.insert(ALLFRAMES, w)
     return w
 end
 
@@ -184,6 +187,7 @@ local ROSTER, SOUNDS, SHOWN, REFS
 
 local function world(withoutNames)
     NAMED = {}
+    ALLFRAMES = {}
     SAID, FILES, IMPORTED, POPUP, NOW, SHIFT, CTRL = {}, {}, nil, nil, 100, false, false
     CACHED, DRESSED, SOUNDS = {}, nil, {}
     PlaySound = function(name) table.insert(SOUNDS, name) end
@@ -241,7 +245,7 @@ local function world(withoutNames)
     RollFor = { key_bindings = { import = function(d) IMPORTED = d end } }
     RaidResHttpGet, RaidResHttpResult = nil, nil
     RaidResBridge, RaidResBridge_Manual, RaidResBridge_Limit = nil, nil, nil
-    RaidResBridge_Data, RaidResBridge_Ref = nil, nil
+    RaidResBridge_Data, RaidResBridge_Ref, RaidResBridge_Locked = nil, nil, nil
 
     dofile(DIR .. "expected.lua")
     RaidResBridge_Raids = Expected_Raids
@@ -268,6 +272,44 @@ end
 local function heard(text)
     for _, m in ipairs(SAID) do if string.find(m, text, 1, true) then return true end end
     return false
+end
+
+-- Let time pass: every visible frame's OnUpdate, a quarter second at a time.
+local function run(seconds)
+    for _ = 1, math.floor(seconds / 0.25 + 0.5) do
+        NOW = NOW + 0.25
+        for _, w in ipairs(ALLFRAMES) do
+            if w.scripts.OnUpdate and w:IsVisible() then fire(w, "OnUpdate", 0.25) end
+        end
+    end
+end
+
+--[[ A stand-in for RaidResHttp.dll. Pages are put in PAGES by path (nil is a
+     404); every path asked for is recorded in ASKED. A request answers on its
+     first look, so a second of `run` is plenty. ]]
+local ASKED, PAGES = {}, {}
+local function fakeDll()
+    ASKED, PAGES = {}, {}
+    local id, open = 0, {}
+    RaidResHttpGet = function(path)
+        id = id + 1
+        open[id] = path
+        table.insert(ASKED, path)
+        return id
+    end
+    RaidResHttpResult = function(n)
+        local path = open[n]
+        if not path then return nil, "unknown request" end
+        open[n] = nil
+        local page = PAGES[path]
+        if page == nil then return "done", 404, "" end
+        if page.failed then return "failed", page.failed end
+        return "done", 200, page.body
+    end
+end
+local function eventJson(locked)
+    local lock = (locked == nil) and "" or ('"locked":' .. tostring(locked) .. ",")
+    return '{' .. lock .. '"raidId":100,"reservations":[]}'
 end
 
 -- The visible rows of a list, as text.
@@ -990,6 +1032,129 @@ click(findRow(RB.gui.pRows, "Newbie"))
 check("works", RB.player, "Newbie")
 check("just without matching", RB.gui.matchBtn:IsShown(), false)
 
+-- ================================================================== the lock button
+print("the lock button")
+RB = world()
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+local GREEN_TAG, GOLD_TAG = "|cff20ff20", "|cffffd200"
+check("a list from raidres gets the button", f.lockBtn:IsShown(), true)
+check("it says Locked", plain(f.lockState:GetText()), "Locked")
+check("in green", string.find(f.lockState:GetText(), GREEN_TAG, 1, true) ~= nil, true)
+check("the status is the list and its raid, no more", plain(f.status:GetText()), "DEMO42  Zul'Gurub")
+
+local DATA = FILES["RaidResBridge_data.lua"]
+FILES["RaidResBridge_data.lua"] = string.gsub(DATA, "RaidResBridge_Locked = true", "RaidResBridge_Locked = false")
+RB.Refresh()
+check("unlocked says Unlocked", plain(f.lockState:GetText()), "Unlocked")
+check("in gold, as a thing to look at", string.find(f.lockState:GetText(), GOLD_TAG, 1, true) ~= nil, true)
+
+FILES["RaidResBridge_data.lua"] = string.gsub(DATA, "RaidResBridge_Locked = true\n", "")
+RB.Refresh()
+check("a list that doesn't say is Lock ?, not Unlocked", plain(f.lockState:GetText()), "Lock ?")
+
+FILES["RaidResBridge_data.lua"] = nil
+RB.Refresh()
+check("no list from raidres, no button", f.lockBtn:IsShown(), false)
+FILES["RaidResBridge_data.lua"] = DATA
+RB.Refresh()
+check("and it comes back with one", f.lockBtn:IsShown(), true)
+
+print("the lock button, without the DLL")
+enter(f.lockBtn)
+check("the tooltip says what it means", tipHas("Locked: nobody can change their reserves on raidres."), true)
+check("that it's as of the last fetch", tipHas("As of the last fetch. Press Fetch to check again."), true)
+check("and where to lock it", tipHas("Lock or unlock it on the raidres site."), true)
+local askedBefore = table.getn(ASKED)
+check("(there is no DLL to ask)", RaidResHttpGet, nil)
+click(f.lockBtn)
+check("clicking says how to check", string.find(hint(f), "press Fetch to check again", 1, true) ~= nil, true)
+run(40)
+check("and nothing is looked up behind your back", table.getn(ASKED), askedBefore)
+check("nor is a watcher request written for it", FILES["RaidResBridge_request.txt"], nil)
+-- With nothing able to look again, an old answer can't be doubted: it's the
+-- only one there will be.
+RB.lockInfo = { ref = "DEMO42", locked = true, at = NOW - 5000 }
+RB.Refresh()
+check("without the DLL an old state still stands", plain(f.lockState:GetText()), "Locked")
+
+print("the lock button, with the DLL")
+RB = world()
+fakeDll()
+PAGES["/api/events/DEMO42"] = { status = 201, body = eventJson(true) }
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+check("opening the window looks at the lock", ASKED[1], "/api/events/DEMO42")
+check("quietly, not as a fetch", RB.HttpBusy(), false)
+check("so the status doesn't claim to be fetching", string.find(plain(f.status:GetText()), "Fetching", 1, true), nil)
+enter(f.lockBtn)
+check("until it's answered it's as of the last fetch", tipHas("As of the last fetch; checking now."), true)
+run(1)
+check("the answer: still locked", plain(f.lockState:GetText()), "Locked")
+enter(f.lockBtn)
+check("the tooltip now says when", tipHas("Checked "), true)
+check("and how often", tipHas("looks again every 30 while this window is open"), true)
+
+run(25)
+check("no second look inside half a minute", table.getn(ASKED), 1)
+run(10)
+check("one every half minute", table.getn(ASKED), 2)
+
+-- Until the next look has been made, then a moment for its answer: a notice
+-- lasts 4 seconds, so what it says has to be read straight after.
+local function nextLook()
+    local n = table.getn(ASKED) + 1
+    for _ = 1, 400 do
+        if table.getn(ASKED) >= n then break end
+        run(0.25)
+    end
+    run(0.5)
+end
+
+-- somebody unlocks it on the site
+PAGES["/api/events/DEMO42"] = { status = 201, body = eventJson(false) }
+nextLook()
+check("the button follows", plain(f.lockState:GetText()), "Unlocked")
+check("and the window says so", string.find(hint(f), "unlocked on raidres", 1, true) ~= nil, true)
+PAGES["/api/events/DEMO42"] = { status = 201, body = eventJson(true) }
+nextLook()
+check("and back again", plain(f.lockState:GetText()), "Locked")
+check("announced too", string.find(hint(f), "locked on raidres", 1, true) ~= nil, true)
+
+-- the button asks now
+local asked = table.getn(ASKED)
+click(f.lockBtn)
+check("clicking looks immediately", table.getn(ASKED), asked + 1)
+check("and says so", string.find(hint(f), "checking raidres", 1, true) ~= nil, true)
+click(f.lockBtn)
+check("clicking while it's looking doesn't pile on", table.getn(ASKED), asked + 1)
+check("and says it already is", string.find(hint(f), "already checking", 1, true) ~= nil, true)
+run(1)
+
+-- the site stops answering
+PAGES["/api/events/DEMO42"] = nil
+run(31)
+local afterFail = table.getn(ASKED)
+run(31)
+check("after a failed look it waits a full minute", table.getn(ASKED), afterFail)
+run(30)
+check("then tries again", table.getn(ASKED), afterFail + 1)
+check("meanwhile what was known is still shown", plain(f.lockState:GetText()), "Locked")
+run(120)
+check("but not as fact for ever", plain(f.lockState:GetText()), "Lock ?")
+enter(f.lockBtn)
+check("the tooltip says it isn't known", tipHas("Not known right now."), true)
+PAGES["/api/events/DEMO42"] = { status = 201, body = eventJson(true) }
+click(f.lockBtn)
+run(1)
+check("and the next good answer restores it", plain(f.lockState:GetText()), "Locked")
+
+print("the lock button, closed")
+f:Hide()
+local closedAsked = table.getn(ASKED)
+run(120)
+check("a closed window looks at nothing", table.getn(ASKED), closedAsked)
+
 -- ================================================================== pfUI
 print("with pfUI")
 RB = world()
@@ -1007,7 +1172,7 @@ SlashCmdList.RAIDRESBRIDGE("")
 f = RB.gui
 check("pfUI skins it", f.pfui, true)
 check("its frame and three boxes", CALLS.CreateBackdrop >= 4, true)
-check("its five buttons", CALLS.SkinButton, 5)
+check("its six buttons", CALLS.SkinButton, 6)
 check("both checkboxes", CALLS.SkinCheckbox, 2)
 check("the dropdown", CALLS.SkinDropDown, 1)
 check("both scroll bars", CALLS.SkinScrollbar, 2)

@@ -395,5 +395,114 @@ do
     check("and no DLL at all is said plainly", heard("isn't loaded"), true)
 end
 
+-- ================================================================== the lock
+print("is it locked")
+local function eventPage(change)
+    return { status = 201, body = change(slurp("event_DEMO42.json")) }
+end
+do
+    local RB = world(true)
+    serve()
+    SlashCmdList.RAIDRESBRIDGE("DEMO42")
+    run(3)
+    check("a fetch remembers whether raidres has the list locked", RB.LockState("DEMO42"), true)
+    check("however it's asked for", RB.LockState("demo42"), true)
+    check("and writes it down for next time",
+        string.find(FILES["RaidResBridge_data.lua"], "RaidResBridge_Locked = true", 1, true) ~= nil, true)
+    RaidResBridge_Locked, RB.lockInfo, RB.fetched = nil, nil, nil
+    RB.Read()
+    check("which reads back", RB.LockState("DEMO42"), true)
+
+    -- it gets unlocked on the site; a refetch notices
+    SITE["/api/events/DEMO42"] = eventPage(function(b) return (string.gsub(b, '"locked":true', '"locked":false')) end)
+    SAID = {}
+    SlashCmdList.RAIDRESBRIDGE("DEMO42")
+    run(3)
+    check("a refetch sees it unlocked", RB.LockState("DEMO42"), false)
+    check("and says so", heard("unlocked on raidres"), true)
+    check("writing that down too",
+        string.find(FILES["RaidResBridge_data.lua"], "RaidResBridge_Locked = false", 1, true) ~= nil, true)
+
+    -- an event that doesn't say
+    SITE["/api/events/DEMO42"] = eventPage(function(b) return (string.gsub(b, '"locked":%a+,', "")) end)
+    check("the page really lacks it", string.find(SITE["/api/events/DEMO42"].body, '"locked"', 1, true), nil)
+    SlashCmdList.RAIDRESBRIDGE("DEMO42")
+    run(3)
+    check("is not assumed unlocked", string.find(FILES["RaidResBridge_data.lua"], "Locked", 1, true), nil)
+    RaidResBridge_Locked, RB.lockInfo, RB.fetched = nil, nil, nil
+    RB.Read()
+    check("it reads back as unknown", RB.LockState("DEMO42"), nil)
+
+    SITE["/api/events/DEMO42"] = eventPage(function(b) return (string.gsub(b, '"locked":true', '"locked":"yes"')) end)
+    SlashCmdList.RAIDRESBRIDGE("DEMO42")
+    run(3)
+    check("nor is a lock that isn't true or false", string.find(FILES["RaidResBridge_data.lua"], "Locked", 1, true), nil)
+end
+
+print("looking again, quietly")
+do
+    local RB = world(true)
+    serve()
+    SlashCmdList.RAIDRESBRIDGE("DEMO42")
+    run(3)
+    check("locked to begin with", RB.LockState("DEMO42"), true)
+    check("a manual list has nothing to look at", RB.HttpPollLock("manual"), false)
+    check("nor does no list", RB.HttpPollLock(nil), false)
+
+    SITE["/api/events/DEMO42"] = eventPage(function(b) return (string.gsub(b, '"locked":true', '"locked":false')) end)
+    local before = table.getn(REQUESTED)
+    check("it looks", RB.HttpPollLock("DEMO42"), true)
+    check("at the event page", REQUESTED[before + 1], "/api/events/DEMO42")
+    check("only one look at a time", RB.HttpPollLock("DEMO42"), false)
+    check("the addon is waiting on it", (RB.HttpWaiting()), 1)
+    check("but a look is not a fetch under way", RB.HttpBusy(), false)
+    SAID = {}
+    SlashCmdList.RAIDRESBRIDGE("DEMO42")
+    check("so a /rrb in the meantime isn't turned away", heard("still fetching"), false)
+    run(3)
+    check("it sees the change", RB.LockState("DEMO42"), false)
+    check("and says so", heard("unlocked on raidres"), true)
+    local at = select(2, RB.LockState("DEMO42"))
+    check("it's recorded as checked just now", at ~= nil and at > NOW - 4 and at <= NOW, true)
+
+    SAID = {}
+    RB.HttpPollLock("DEMO42")
+    run(3)
+    check("the same answer again says nothing", heard("raidres"), false)
+
+    -- a reply that arrives after another list took over is dropped
+    SITE["/api/events/DEMO42"] = { status = 201, body = slurp("event_DEMO42.json") }
+    RB.HttpPollLock("DEMO42")
+    RB.activeRef = "OTHER99"
+    run(3)
+    check("a late reply for a list that's no longer the active one is ignored", RB.LockState("DEMO42"), false)
+    RB.activeRef = "DEMO42"
+
+    -- it fails
+    SITE["/api/events/DEMO42"] = nil
+    RB.pollFailed = nil
+    RB.HttpPollLock("DEMO42")
+    run(3)
+    check("a look that fails is counted", RB.pollFailed, 1)
+    check("and leaves what was known", RB.LockState("DEMO42"), false)
+    SITE["/api/events/DEMO42"] = eventPage(function(b) return (string.gsub(b, '"locked":true', '"locked":"yes"')) end)
+    RB.HttpPollLock("DEMO42")
+    run(3)
+    check("an answer that isn't true or false is a failed look too", RB.pollFailed, 2)
+    check("and changes nothing", RB.LockState("DEMO42"), false)
+    SITE["/api/events/DEMO42"] = { status = 201, body = slurp("event_DEMO42.json") }
+    RB.HttpPollLock("DEMO42")
+    run(3)
+    check("the next that works resets the count", RB.pollFailed, 0)
+    check("and takes the new answer", RB.LockState("DEMO42"), true)
+
+    check("with no window there is nothing to time the looks", RB.MaybePollLock(), false)
+end
+do
+    local RB = world(false)
+    check("without the DLL there is nothing to look with", RB.HttpPollLock("DEMO42"), false)
+    check("or to time", RB.MaybePollLock(true), false)
+end
+
 print(string.format("\n%d check(s), %d failure(s)", checks, failures))
 os.exit(failures == 0 and 0 or 1)
