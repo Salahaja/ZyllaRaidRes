@@ -9,11 +9,13 @@
        3. Pick one, and the loot is theirs to click: click to reserve, click
           again to take it back. Their reserves show under the list, with an X
           on the ones typed here.
-       4. Every change goes to RollFor as it is made.
+       4. Every change goes to RollFor as it is made, and the RollFor box at
+          the bottom says whether RollFor really holds this list -- read
+          back from RollFor's own record, not assumed.
 
      The rules it keeps:
-       - One selection drives everything, and the line at the bottom always
-         says what the next click will do.
+       - One selection drives everything, and the line under the lists
+         always says what the next click will do.
        - Nothing here can remove what someone reserved on raidres. Those are
          marked and locked, because a refetch would bring them straight back
          and the window would have lied.
@@ -25,7 +27,10 @@
      window, its grey labelled boxes, the Who list's column headers, the quest
      log's highlight and its +/- headers, a real UIDropDownMenu, and the
      client's own class and item colours. With pfUI loaded it is skinned the
-     way pfUI skins every Blizzard window.
+     way pfUI skins every Blizzard window. Every widget is registered by kind
+     as it is built, and a skin works through those lists, so nothing added
+     later can be left in the other look. The look can also be picked:
+     RaidResBridge_Options.skin, from the minimap button's menu or /rrb skin.
 
      Every handler reads `this`, never a loop variable: Lua 5.0 shares a for
      loop's variables with the closures made inside it. Rows are sized
@@ -38,7 +43,7 @@ local RB = RaidResBridge
 -- Layout
 -- ---------------------------------------------------------------------------
 
-local W, H = 680, 500
+local W = 680
 local ROW_H = 18
 local EDGE = 20                 -- inside the dialog border
 local BOX_TOP = 78              -- the boxes start here; their labels sit above
@@ -56,6 +61,10 @@ local L_H = D_TOP + D_H - BOX_TOP
 local L_LIST_TOP = 38           -- under the dropdown
 local L_ROWS = 17
 local SCROLLBAR = 22
+local HINT_TOP = D_TOP + D_H + 6
+local R_TOP = HINT_TOP + ROW_H + 22     -- the RollFor box; its label sits above
+local R_H = 36
+local H = R_TOP + R_H + EDGE
 
 local DIALOG = {
     bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -77,6 +86,7 @@ local QMARK = "Interface\\Icons\\INV_Misc_QuestionMark"
 local PLUS = "Interface\\Buttons\\UI-PlusButton-Up"
 local MINUS = "Interface\\Buttons\\UI-MinusButton-Up"
 local CHECK = "Interface\\Buttons\\UI-CheckBox-Check"
+local DICE = "Interface\\Buttons\\UI-GroupLoot-Dice-Up"     -- the group loot roll button's
 
 -- The client's own text colours (NORMAL_FONT_COLOR and friends).
 local GOLD, WHITE, GREY = "ffd200", "ffffff", "808080"
@@ -129,11 +139,6 @@ end
 -- The same name key Manual.lua uses: case and spaces do not make two people.
 local function key(name)
     return string.lower(string.gsub(name or "", "%s", ""))
-end
-
-local function rollForReady()
-    return RollFor and RollFor.key_bindings
-        and type(RollFor.key_bindings.import) == "function"
 end
 
 -- ---------------------------------------------------------------------------
@@ -321,7 +326,25 @@ function RB.Snapshot()
     end
 
     s.players = RB.Players(s)
+    s.sig, _, s.reserved = RB.Signature(merged)
     return s
+end
+
+--- How many players have all their reserves, out of everyone shown.
+function RB.Progress(s)
+    local limit, done = RB.Limit(), 0
+    for _, p in ipairs(s.players) do
+        if p.count >= limit then done = done + 1 end
+    end
+    return done, table.getn(s.players)
+end
+
+--- The raid a list is for, by name, as well as anything knows it.
+function RB.ListPlace(s)
+    local raids = RaidResBridge_Raids or {}
+    local meta = s.merged.metadata or {}
+    return (s.instance and raids[s.instance] and raids[s.instance].name)
+        or (meta.instances and meta.instances[1]) or "?"
 end
 
 --[[ Zones that are not called what raidres calls their raid.
@@ -728,6 +751,16 @@ end
 -- Widgets: the client's own
 -- ---------------------------------------------------------------------------
 
+--[[ Every widget, by kind, as it is made. The skin works through these
+     lists rather than naming widgets one by one, so a button added next year
+     is skinned without anyone remembering to add it there. ]]
+local parts = { box = {}, button = {}, check = {}, edit = {}, drop = {},
+                scroll = {}, close = {}, header = {}, row = {} }
+local function part(kind, w)
+    table.insert(parts[kind], w)
+    return w
+end
+
 local function text(parent, template, justify)
     local fs = parent:CreateFontString(nil, "OVERLAY", template or "GameFontHighlightSmall")
     fs:SetJustifyH(justify or "LEFT")
@@ -745,15 +778,15 @@ local function box(parent, label, w, h)
     b.label = b:CreateFontString(nil, "BACKGROUND", "GameFontHighlightSmall")
     b.label:SetPoint("BOTTOMLEFT", b, "TOPLEFT", 9, 3)
     b.label:SetText(label)
-    return b
+    return part("box", b)
 end
 
-local function button(parent, label, w)
-    local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+local function button(parent, label, w, h, name)
+    local b = CreateFrame("Button", name, parent, "UIPanelButtonTemplate")
     b:SetWidth(w)
-    b:SetHeight(22)
+    b:SetHeight(h or 22)
     b:SetText(label)
-    return b
+    return part("button", b)
 end
 
 local function checkbox(parent, name, label)
@@ -765,7 +798,7 @@ local function checkbox(parent, name, label)
         c.label:SetFontObject(GameFontNormalSmall)
         c.label:SetText(label)
     end
-    return c
+    return part("check", c)
 end
 
 -- The Who list's column header, sized the way the Who list sizes its own.
@@ -779,7 +812,7 @@ local function columnHeader(parent, name, label, w)
         if mid then mid:SetWidth(w - 9) end
     end
     h:SetText(label)
-    return h
+    return part("header", h)
 end
 
 -- An edit box with grey placeholder text while it is empty and unfocused.
@@ -807,7 +840,7 @@ local function editBox(parent, name, w, placeholder)
         syncPlaceholder(this)
     end)
     e:SetScript("OnEscapePressed", function() this:ClearFocus() end)
-    return e
+    return part("edit", e)
 end
 
 --[[ A list row, lit the way the quest log and friends list light theirs: the
@@ -826,7 +859,7 @@ local function listRow(parent, w)
     row.icon:Hide()
     row.text = text(row)
     row.text:SetHeight(ROW_H)
-    return row
+    return part("row", row)
 end
 
 local function setSelected(row, on)
@@ -849,6 +882,8 @@ local function scrollFrame(parent, name, w, rows, top)
     sf:SetScript("OnVerticalScroll", function()
         FauxScrollFrame_OnVerticalScroll(ROW_H, RB.Draw)
     end)
+    local bar = getglobal(name .. "ScrollBar")
+    if bar then part("scroll", bar) end
     return sf
 end
 
@@ -911,11 +946,8 @@ local function buildPlayers(f)
     f.dEmpty:SetWidth(P_W - 20)
 
     -- Settling who is who, when the names don't quite match.
-    f.matchBtn = CreateFrame("Button", "ZyllaRaidResMatchButton", db, "UIPanelButtonTemplate")
-    f.matchBtn:SetWidth(62)
-    f.matchBtn:SetHeight(18)
+    f.matchBtn = button(db, "Match", 62, 18, "ZyllaRaidResMatchButton")
     f.matchBtn:SetPoint("BOTTOMRIGHT", db, "TOPRIGHT", -4, 1)
-    f.matchBtn:SetText("Match")
     f.matchBtn:SetScript("OnClick", function()
         ToggleDropDownMenu(1, nil, RB.gui.matchMenu, "ZyllaRaidResMatchButton", 0, 0)
     end)
@@ -938,7 +970,7 @@ local function buildPlayers(f)
         row.tag:SetWidth(48)
         row.tag:SetHeight(ROW_H)
         row.tag:SetText("raidres")
-        row.remove = CreateFrame("Button", nil, row, "UIPanelCloseButton")
+        row.remove = part("close", CreateFrame("Button", nil, row, "UIPanelCloseButton"))
         row.remove:SetWidth(22)
         row.remove:SetHeight(22)
         row.remove:SetPoint("RIGHT", row, "RIGHT", 3, 0)
@@ -1065,7 +1097,7 @@ local function buildLoot(f)
     f.lBox = lb
     local inner = L_W - 16 - SCROLLBAR
 
-    f.raidDrop = CreateFrame("Frame", "ZyllaRaidResRaidDrop", lb, "UIDropDownMenuTemplate")
+    f.raidDrop = part("drop", CreateFrame("Frame", "ZyllaRaidResRaidDrop", lb, "UIDropDownMenuTemplate"))
     f.raidDrop:SetPoint("TOPLEFT", lb, "TOPLEFT", -8, -4)
     UIDropDownMenu_SetWidth(150, f.raidDrop)
     UIDropDownMenu_Initialize(f.raidDrop, RB.InitRaidMenu)
@@ -1136,12 +1168,140 @@ local function buildLoot(f)
     f.lEmptyButton:SetScript("OnClick", function() RB.FetchLoot() end)
 end
 
+--- Clear typed: every reserve added in this window, after asking.
+function RB.AskClearTyped()
+    if StaticPopupDialogs and not StaticPopupDialogs.ZYLLARAIDRES_CLEAR then
+        StaticPopupDialogs.ZYLLARAIDRES_CLEAR = {
+            text = "Remove the %s reserve(s) added by hand?\nReserves made on raidres stay.",
+            button1 = YES or "Yes",
+            button2 = NO or "No",
+            OnAccept = function()
+                RB.ClearManual()
+                RB.Commit()
+                RB.Notice("cleared everything added by hand.")
+            end,
+            timeout = 0, whileDead = 1, hideOnEscape = 1,
+        }
+    end
+    local s = RB.gui and RB.gui.snap
+    StaticPopup_Show("ZYLLARAIDRES_CLEAR", tostring(s and s.typedCount or 0))
+end
+
+--[[ The RollFor box: does RollFor hold this list, and the buttons that act
+     on RollFor. On the left RollFor's dice -- the group loot roll button's --
+     and two lines, the state and what RollFor holds; on the right Clear
+     typed, set a little apart from the two that talk to RollFor. ]]
+local function buildRollFor(f)
+    local rb = box(f, "RollFor", W - EDGE * 2, R_H)
+    rb:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE, -R_TOP)
+    f.rBox = rb
+
+    f.rfIcon = rb:CreateTexture(nil, "ARTWORK")
+    f.rfIcon:SetTexture(DICE)
+    f.rfIcon:SetWidth(22)
+    f.rfIcon:SetHeight(22)
+    f.rfIcon:SetPoint("LEFT", rb, "LEFT", 9, 0)
+
+    f.send = button(rb, "Send to RollFor", 124)
+    f.send:SetPoint("RIGHT", rb, "RIGHT", -7, 0)
+    f.send:SetScript("OnClick", function() RB.Apply() end)
+    f.send:SetScript("OnEnter", function() RB.SendTooltip(this) end)
+    f.send:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    f.view = button(rb, "View in RollFor", 112)
+    f.view:SetPoint("RIGHT", f.send, "LEFT", -4, 0)
+    f.view:SetScript("OnClick", function()
+        if not RB.ViewInRollFor() then RB.Notice("this RollFor has no soft-res window to open.") end
+    end)
+    tip(f.view, "View in RollFor",
+        "Open RollFor's own soft-res window, to see the list the way RollFor has it.")
+
+    f.clear = button(rb, "Clear typed", 92)
+    f.clear:SetPoint("RIGHT", f.view, "LEFT", -12, 0)
+    f.clear:SetScript("OnClick", function() RB.AskClearTyped() end)
+    tip(f.clear, "Clear typed", "Remove every reserve added in this window. Asks first.")
+
+    -- two lines of 12 beside the dice, held to the box so they never overlap
+    local textX = 9 + 22 + 8
+    local textW = W - EDGE * 2 - textX - (7 + 124 + 4 + 112 + 12 + 92) - 8
+    f.rfHead = text(rb, "GameFontHighlightSmall")
+    f.rfHead:SetPoint("TOPLEFT", rb, "TOPLEFT", textX, -6)
+    f.rfHead:SetWidth(textW)
+    f.rfHead:SetHeight(12)
+    f.rfBody = text(rb, "GameFontDisableSmall")
+    f.rfBody:SetPoint("BOTTOMLEFT", rb, "BOTTOMLEFT", textX, 6)
+    f.rfBody:SetWidth(textW)
+    f.rfBody:SetHeight(12)
+end
+
+function RB.SendTooltip(owner)
+    GameTooltip:SetOwner(owner, "ANCHOR_TOPLEFT")
+    GameTooltip:SetText("Send to RollFor", 1, 0.82, 0)
+    GameTooltip:AddLine("Every change already goes to RollFor as you make it. " ..
+        "This sends the whole list again, and RollFor says in chat what it took.", 1, 1, 1, 1)
+    local sent = RaidResBridge_Sent
+    if sent and sent.players then
+        local when = RB.SentAgo()
+        addGrey("Last sent: " .. sent.players .. " players, " .. sent.items .. " reserves" ..
+            (when and (", " .. when) or "") .. ".")
+    end
+    GameTooltip:Show()
+end
+
+-- ---------------------------------------------------------------------------
+-- The look
+-- ---------------------------------------------------------------------------
+
+local function pfApi()
+    local api = pfUI and pfUI.api
+    if api and api.CreateBackdrop and api.StripTextures then return api end
+    return nil
+end
+
+function RB.HasPfUI() return pfApi() ~= nil end
+
+--[[ Which look to build, "blizzard" or "pfui". RaidResBridge_Options.skin
+     says: "auto" (the default: pfUI's whenever pfUI is loaded), "blizzard"
+     or "pfui". pfUI's look needs pfUI, so without it everything is Blizzard. ]]
+function RB.SkinName()
+    local want = RaidResBridge_Options and RaidResBridge_Options.skin or "auto"
+    if want ~= "blizzard" and pfApi() then return "pfui" end
+    return "blizzard"
+end
+
+--[[ Picking a look. A frame can't be un-skinned -- pfUI strips textures it
+     doesn't keep -- so a change that would alter what is already built asks
+     to reload, which builds everything fresh in the new look. ]]
+function RB.SetSkin(which)
+    if which ~= "auto" and which ~= "blizzard" and which ~= "pfui" then return false end
+    RaidResBridge_Options = RaidResBridge_Options or {}
+    RaidResBridge_Options.skin = which
+    local built = RB.builtSkin
+    if built and built ~= RB.SkinName() and StaticPopupDialogs then
+        if not StaticPopupDialogs.ZYLLARAIDRES_RELOAD then
+            StaticPopupDialogs.ZYLLARAIDRES_RELOAD = {
+                text = "Zylla RaidRes changes its look after a reload.\nReload the UI now?",
+                button1 = "Reload",
+                button2 = "Later",
+                OnAccept = function() ReloadUI() end,
+                timeout = 0, whileDead = 1, hideOnEscape = 1,
+            }
+        end
+        StaticPopup_Show("ZYLLARAIDRES_RELOAD")
+    end
+    return true
+end
+
 --[[ pfUI restyles Blizzard's windows; with it loaded, this one gets the same
      treatment through pfUI's own skinning functions, so it matches whatever
      pfUI theme is in use. Any trouble leaves the Blizzard look in place. ]]
 function RB.SkinForPfUI(f)
-    local api = pfUI and pfUI.api
-    if not api or not api.CreateBackdrop or not api.StripTextures then return false end
+    local api = pfApi()
+    if not api then return false end
+    local function each(kind, fn)
+        local list = parts[kind]
+        for i = 1, table.getn(list) do fn(list[i]) end
+    end
     local ok = pcall(function()
         f:SetBackdrop(nil)
         f.header:Hide()
@@ -1150,32 +1310,30 @@ function RB.SkinForPfUI(f)
         f.title:ClearAllPoints()
         f.title:SetPoint("TOP", f, "TOP", 0, -10)
         if api.SkinCloseButton then api.SkinCloseButton(f.close, f.backdrop or f, -6, -6) end
-        local boxes = { f.pBox, f.dBox, f.lBox }
-        for i = 1, table.getn(boxes) do
-            boxes[i]:SetBackdrop(nil)
-            api.CreateBackdrop(boxes[i], nil, true)
+        each("box", function(b)
+            b:SetBackdrop(nil)
+            api.CreateBackdrop(b, nil, true)
+        end)
+        if api.SkinButton then each("button", function(b) api.SkinButton(b) end) end
+        if api.SkinCheckbox then each("check", function(c) api.SkinCheckbox(c) end) end
+        each("edit", function(e)
+            api.StripTextures(e)
+            api.CreateBackdrop(e)
+        end)
+        if api.SkinDropDown then
+            each("drop", function(d) api.SkinDropDown(d, nil, nil, nil, true) end)
         end
-        local buttons = { f.fetch, f.send, f.clear, f.lEmptyButton, f.matchBtn, f.lockBtn }
-        for i = 1, table.getn(buttons) do
-            if api.SkinButton then api.SkinButton(buttons[i]) end
-        end
-        local checks = { f.missing, f.classOnly }
-        for i = 1, table.getn(checks) do
-            if api.SkinCheckbox then api.SkinCheckbox(checks[i]) end
-        end
-        local edits = { f.link, f.search }
-        for i = 1, table.getn(edits) do
-            api.StripTextures(edits[i])
-            api.CreateBackdrop(edits[i])
-        end
-        if api.SkinDropDown then api.SkinDropDown(f.raidDrop, nil, nil, nil, true) end
-        local bars = { "ZyllaRaidResPlayerScrollScrollBar", "ZyllaRaidResLootScrollScrollBar" }
-        for i = 1, table.getn(bars) do
-            local bar = getglobal(bars[i])
-            if bar and api.SkinScrollbar then api.SkinScrollbar(bar) end
-        end
-        api.StripTextures(f.colName)
-        api.StripTextures(f.colCount)
+        if api.SkinScrollbar then each("scroll", function(s) api.SkinScrollbar(s) end) end
+        if api.SkinCloseButton then each("close", function(c) api.SkinCloseButton(c) end) end
+        each("header", function(h) api.StripTextures(h) end)
+        -- A row lights flat, the way pfUI's own lists do, not with the glow.
+        each("row", function(r)
+            local hl = r:GetHighlightTexture()
+            if hl then
+                hl:SetTexture(1, 1, 1, 0.1)
+                hl:SetBlendMode("BLEND")
+            end
+        end)
     end)
     if not ok then
         -- A pfUI that changed underneath us: put the Blizzard frame back.
@@ -1269,39 +1427,13 @@ function RB.BuildGui()
     buildPlayers(f)
     buildLoot(f)
 
-    -- footer
-    f.send = button(f, "Send to RollFor", 124)
-    f.send:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -EDGE + 2, 16)
-    f.send:SetScript("OnClick", function() RB.Apply() end)
-    tip(f.send, "Send to RollFor",
-        "Changes go to RollFor as you make them. This sends everything again, " ..
-        "e.g. after RollFor was reloaded.")
-
-    f.clear = button(f, "Clear typed", 100)
-    f.clear:SetPoint("RIGHT", f.send, "LEFT", -4, 0)
-    f.clear:SetScript("OnClick", function()
-        if StaticPopupDialogs and not StaticPopupDialogs.ZYLLARAIDRES_CLEAR then
-            StaticPopupDialogs.ZYLLARAIDRES_CLEAR = {
-                text = "Remove the %s reserve(s) added by hand?\nReserves made on raidres stay.",
-                button1 = YES or "Yes",
-                button2 = NO or "No",
-                OnAccept = function()
-                    RB.ClearManual()
-                    RB.Commit()
-                    RB.Notice("cleared everything added by hand.")
-                end,
-                timeout = 0, whileDead = 1, hideOnEscape = 1,
-            }
-        end
-        local s = RB.gui.snap
-        StaticPopup_Show("ZYLLARAIDRES_CLEAR", tostring(s and s.typedCount or 0))
-    end)
-    tip(f.clear, "Clear typed", "Remove every reserve added in this window. Asks first.")
-
+    -- what the next click will do, under the lists it is about
     f.hint = text(f, "GameFontNormalSmall")
-    f.hint:SetPoint("LEFT", f, "BOTTOMLEFT", EDGE + 4, 27)
-    f.hint:SetWidth(W - EDGE * 2 - 124 - 100 - 16)
+    f.hint:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, -HINT_TOP)
+    f.hint:SetWidth(W - EDGE * 2 - 8)
     f.hint:SetHeight(ROW_H)
+
+    buildRollFor(f)
 
     f:SetScript("OnShow", function()
         if PlaySound then PlaySound("igMainMenuOpen") end
@@ -1339,6 +1471,13 @@ function RB.BuildGui()
             this.notice = nil
             RB.DrawHint()
         end
+        -- Once a second: "sent 2 minutes ago" moves on, and an import made
+        -- in RollFor's own window shows here without a click.
+        this.rfTick = (this.rfTick or 0) + 1
+        if this.rfTick >= 4 then
+            this.rfTick = 0
+            RB.DrawRollFor()
+        end
         -- Is it still locked? A look every 30s, only while this is open.
         if RB.MaybePollLock then RB.MaybePollLock() end
         -- And a state nobody has confirmed for a few minutes stops being shown
@@ -1362,7 +1501,10 @@ function RB.BuildGui()
         end
     end)
 
-    f.pfui = RB.SkinForPfUI(f)
+    f.pfui = false
+    if RB.SkinName() == "pfui" then f.pfui = RB.SkinForPfUI(f) end
+    f.skin = f.pfui and "pfui" or "blizzard"
+    RB.builtSkin = RB.builtSkin or f.skin
     return f
 end
 
@@ -1514,11 +1656,7 @@ function RB.DrawStatus()
     elseif RB.waiting then
         line = hex(GOLD, "Waiting for the watcher...")
     elseif s and s.ref then
-        local raids = RaidResBridge_Raids or {}
-        local meta = s.merged.metadata or {}
-        local where = (s.instance and raids[s.instance] and raids[s.instance].name)
-            or (meta.instances and meta.instances[1]) or "?"
-        line = hex(WHITE, s.ref) .. hex(GREY, "  " .. where)
+        line = hex(WHITE, s.ref) .. hex(GREY, "  " .. RB.ListPlace(s))
     else
         line = hex(GREY, "No list yet. Paste a link, or add reserves by hand.")
     end
@@ -1564,6 +1702,80 @@ function RB.DrawStatus()
     end
 end
 
+-- Each RollFor state: its colour, the window's headline, the tooltip's word.
+local ROLLFOR = {
+    synced  = { GREEN, "In RollFor",                     "Up to date" },
+    stale   = { GOLD,  "Changed since it was sent",      "Changed, not sent" },
+    other   = { GOLD,  "RollFor holds a different list", "Holds another list" },
+    cleared = { GOLD,  "RollFor's list was cleared",     "List cleared" },
+    unsent  = { GOLD,  "Not sent to RollFor yet",        "Not sent yet" },
+    failed  = { RED,   "RollFor refused the list",       "Refused the list" },
+    missing = { RED,   "RollFor isn't loaded",           "Not loaded" },
+    empty   = { GREY,  "Nothing to send yet",            "Nothing to send" },
+}
+
+local function plural(n, one, many) return n .. " " .. (n == 1 and one or many) end
+
+local function ago(seconds)
+    seconds = math.floor(seconds)
+    if seconds < 10 then return "just now" end
+    if seconds < 60 then return seconds .. " seconds ago" end
+    local m = math.floor(seconds / 60)
+    if m < 60 then return plural(m, "minute", "minutes") .. " ago" end
+    return plural(math.floor(m / 60), "hour", "hours") .. " ago"
+end
+
+--- When the list RollFor holds was sent: by this session's clock, else the saved one.
+function RB.SentAgo()
+    if RB.sentAt then return ago(GetTime() - RB.sentAt) end
+    local sent = RaidResBridge_Sent
+    if sent and sent.at and time then return ago(time() - sent.at) end
+    return nil
+end
+
+--[[ Where RollFor stands, in words: the coloured headline, the line under
+     it, the short form for the minimap button's tooltip, its colour, and the
+     state itself. ]]
+function RB.RollForText(s)
+    local state = RB.RollForState(s.sig, s.reserved)
+    local look = ROLLFOR[state]
+    local head, body = hex(look[1], look[2]), nil
+    if state == "synced" then
+        local when = RB.SentAgo()
+        if when then head = head .. hex(GREY, "  sent " .. when) end
+        body = plural(table.getn(s.merged.softreserves or {}), "player", "players") ..
+            ", " .. plural(s.reserved, "reserve", "reserves") ..
+            (s.typedCount > 0 and (", " .. s.typedCount .. " typed here") or "")
+    elseif state == "stale" then body = "Press Send to bring RollFor up to date."
+    elseif state == "other" then body = "Press Send to replace it with this one."
+    elseif state == "cleared" then body = "Press Send to give it this list again."
+    elseif state == "unsent" then body = "Press Send to import it."
+    elseif state == "failed" then body = RB.sendError or ""
+    elseif state == "missing" then body = "Reserves wait here until it is."
+    else body = "Fetch a list, or add reserves by hand."
+    end
+    return head, body, look[3], look[1], state
+end
+
+function RB.DrawRollFor()
+    local f = RB.gui
+    if not f or not f:IsVisible() or not f.snap then return end
+    local s = f.snap
+    local head, body, _, _, state = RB.RollForText(s)
+    f.rfHead:SetText(head)
+    f.rfBody:SetText(body)
+    -- RollFor's dice dim while there is no RollFor, or nothing for it.
+    f.rfIcon:SetAlpha((state == "missing" or state == "empty") and 0.4 or 1)
+    if state ~= "missing" and table.getn(s.merged.softreserves or {}) > 0 then
+        f.send:Enable()
+    else
+        f.send:Disable()
+    end
+    local rf = RollFor and RollFor.key_bindings
+    if rf and type(rf.softres_toggle) == "function" then f.view:Enable() else f.view:Disable() end
+    if s.typedCount > 0 then f.clear:Enable() else f.clear:Disable() end
+end
+
 function RB.DrawHint()
     local f = RB.gui
     if not f then return end
@@ -1571,8 +1783,6 @@ function RB.DrawHint()
     local line
     if f.notice and GetTime() < (f.noticeUntil or 0) then
         line = hex(WHITE, f.notice)
-    elseif not rollForReady() then
-        line = hex(RED, "RollFor isn't loaded, so reserves can't reach it.")
     elseif not RB.player then
         line = "Pick a player, then click loot to reserve it for them."
     elseif s and s.inRaid and s.absent[key(RB.player)] and next(s.free) ~= nil then
@@ -1601,11 +1811,11 @@ end
 
 local function drawPlayers(f, s)
     local limit = RB.Limit()
-    local list, done = {}, 0
+    local list = {}
     for _, p in ipairs(s.players) do
-        if p.count >= limit then done = done + 1 end
         if not RB.missingOnly or p.count < limit then table.insert(list, p) end
     end
+    local done = RB.Progress(s)
     f.pBox.label:SetText("Players" .. hex(GREY, "  " .. done .. " of " ..
         table.getn(s.players) .. " done") ..
         ((s.inRaid and s.toCheck > 0) and hex(GOLD, "  " .. s.toCheck .. " to check") or ""))
@@ -1832,8 +2042,7 @@ function RB.Draw()
         drawDetail(f, s, sel)
         drawLoot(f, s, sel)
         RB.DrawHint()
-        if s.typedCount > 0 then f.clear:Enable() else f.clear:Disable() end
-        if rollForReady() then f.send:Enable() else f.send:Disable() end
+        RB.DrawRollFor()
     end)
     f.drawing = nil
     if not ok then error(err, 0) end

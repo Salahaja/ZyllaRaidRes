@@ -17,6 +17,7 @@ local DIR = ROOT .. "tools/fixtures/"
 table.getn = table.getn or function(t) return #t end
 string.gfind = string.gfind or string.gmatch
 math.mod = math.mod or math.fmod
+math.atan2 = math.atan2 or math.atan
 loadstring = loadstring or load
 
 local failures, checks = 0, 0
@@ -123,6 +124,7 @@ function W:SetHighlightTexture(path)
 end
 function W:GetHighlightTexture() return self.hl end
 function W:SetBlendMode(m) self.blend = m end
+function W:SetPoint(p, rel, rp, x, y) self.point = { p, rel, rp, x, y } end
 function W:LockHighlight() self.locked = true end
 function W:UnlockHighlight() self.locked = false end
 function W:SetValue(v)
@@ -183,7 +185,26 @@ end
 
 -- ------------------------------------------------------------------ the world
 local SAID, FILES, IMPORTED, POPUP, NOW, SHIFT, CTRL, CACHED, TIP, DRESSED
-local ROSTER, SOUNDS, SHOWN, REFS
+local ROSTER, SOUNDS, SHOWN, REFS, CLOCK, CURSOR, VIEWED, RELOADED
+
+--[[ RollFor 4.x as far as this addon meets it: import says so in chat and
+     keeps the list, and when, in RollForCharDb.softres -- unless nobody
+     reserved anything, which it doesn't keep. ]]
+local function fakeRollFor()
+    RollForCharDb = {}
+    RollFor = { key_bindings = {
+        import = function(d)
+            IMPORTED = d
+            DEFAULT_CHAT_FRAME:AddMessage("RollFor: Soft-res data loaded successfully!")
+            local items = 0
+            for _, p in ipairs(d.softreserves or {}) do items = items + table.getn(p.items or {}) end
+            if items > 0 then
+                RollForCharDb.softres = { data = "encoded" .. items, import_timestamp = CLOCK }
+            end
+        end,
+        softres_toggle = function() VIEWED = true end,
+    } }
+end
 
 local function world(withoutNames)
     NAMED = {}
@@ -200,6 +221,10 @@ local function world(withoutNames)
     ChatFrame_OnEvent = function(evt) table.insert(SHOWN, { event = evt, text = arg1 }) end
     SetItemRef = function(link) table.insert(REFS, link) end
     TIP = { lines = {} }
+    CLOCK, CURSOR, VIEWED, RELOADED = 1700000000, { 0, 0 }, false, false
+    time = function() return CLOCK end
+    ReloadUI = function() RELOADED = true end
+    GetCursorPosition = function() return CURSOR[1], CURSOR[2] end
     DEFAULT_CHAT_FRAME = { AddMessage = function(_, m) table.insert(SAID, m) end }
     SlashCmdList = {}
     UISpecialFrames = {}
@@ -214,6 +239,7 @@ local function world(withoutNames)
         SetOwner = function(_, o) TIP = { owner = o, lines = {} } end,
         SetText = function(_, t) table.insert(TIP.lines, t) end,
         AddLine = function(_, t) table.insert(TIP.lines, t) end,
+        AddDoubleLine = function(_, l, r) table.insert(TIP.lines, l .. "  " .. r) end,
         SetHyperlink = function(_, l) TIP.link = l; table.insert(TIP.lines, "<item>") end,
         Show = function() TIP.shown = true end,
         Hide = function() TIP.shown = false end,
@@ -242,9 +268,12 @@ local function world(withoutNames)
     GetNumPartyMembers = function() return 0 end
     WriteCustomFile = function(n, t) FILES[n] = t end
     ReadCustomFile = function(n) return FILES[n] end
-    RollFor = { key_bindings = { import = function(d) IMPORTED = d end } }
+    fakeRollFor()
+    Minimap = new("Frame", "Minimap", UIParent)
+    GetMinimapShape = nil
     RaidResHttpGet, RaidResHttpResult = nil, nil
     RaidResBridge, RaidResBridge_Manual, RaidResBridge_Limit = nil, nil, nil
+    RaidResBridge_Sent, RaidResBridge_Options = nil, nil
     RaidResBridge_Data, RaidResBridge_Ref, RaidResBridge_Locked = nil, nil, nil
 
     dofile(DIR .. "expected.lua")
@@ -257,6 +286,7 @@ local function world(withoutNames)
     if not withoutNames then dofile(ROOT .. "Names.lua") end
     dofile(ROOT .. "Manual.lua")
     dofile(ROOT .. "Gui.lua")
+    dofile(ROOT .. "Minimap.lua")
     dofile(ROOT .. "Chat.lua")
     return RaidResBridge
 end
@@ -665,9 +695,12 @@ print("without RollFor")
 RollFor = nil
 NOW = NOW + 5    -- past the "cleared" notice, which outranks it for 4s
 RB.Refresh()
-check("the hint says RollFor is missing", string.find(hint(f), "RollFor isn't loaded", 1, true) ~= nil, true)
+check("the RollFor box says RollFor is missing",
+    string.find(plain(f.rfHead:GetText()), "RollFor isn't loaded", 1, true) ~= nil, true)
+check("not the hint, which stays on what to click", string.find(hint(f), "RollFor", 1, true), nil)
 check("and Send is greyed out", f.send.enabled, false)
-RollFor = { key_bindings = { import = function(d) IMPORTED = d end } }
+check("and so is View", f.view.enabled, false)
+fakeRollFor()
 
 -- ================================================================== fetching
 print("fetching from the window")
@@ -1155,6 +1188,155 @@ local closedAsked = table.getn(ASKED)
 run(120)
 check("a closed window looks at nothing", table.getn(ASKED), closedAsked)
 
+-- ================================================================== the RollFor box
+print("the RollFor box")
+RB = world()
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+local function rfHead() return plain(f.rfHead:GetText()) end
+local function rfBody() return plain(f.rfBody:GetText()) end
+check("nothing sent from here yet", rfHead(), "Not sent to RollFor yet")
+check("and it says what to do", rfBody(), "Press Send to import it.")
+SAID = {}
+click(f.send)
+check("Send imports", IMPORTED ~= nil, true)
+check("and RollFor's own answer is heard", heard("Soft-res data loaded"), true)
+check("the box says RollFor holds it", rfHead(), "In RollFor  sent just now")
+local players, reserves = 0, 0
+for _, p in ipairs(IMPORTED.softreserves) do
+    players = players + 1
+    reserves = reserves + table.getn(p.items)
+end
+check("and what it holds", rfBody(), players .. " players, " .. reserves .. " reserves")
+run(65)
+check("the time moves on by itself", rfHead(), "In RollFor  sent 1 minute ago")
+
+print("the RollFor box, as changes are made")
+click(findRow(f.pRows, "Newbie"))
+SAID = {}
+local before = IMPORTED
+click(firstItemRow(f))
+check("a click reaches RollFor", IMPORTED ~= before, true)
+check("without RollFor answering in chat", heard("Soft-res data loaded"), false)
+check("chat works again afterwards", (function()
+    DEFAULT_CHAT_FRAME:AddMessage("hello")
+    return heard("hello")
+end)(), true)
+check("the box keeps up", rfHead(), "In RollFor  sent just now")
+check("counting the typed one", string.find(rfBody(), "1 typed here", 1, true) ~= nil, true)
+
+-- RollFor's own import window, or another addon, puts another list in.
+RollForCharDb.softres = { data = "someone else's", import_timestamp = CLOCK + 50 }
+run(1)
+check("another list in RollFor is noticed", rfHead(), "RollFor holds a different list")
+RollForCharDb.softres = {}
+run(1)
+check("so is RollFor's list being cleared", rfHead(), "RollFor's list was cleared")
+click(f.send)
+check("and Send puts this one back", rfHead(), "In RollFor  sent just now")
+
+-- Typed in without the window, so nothing sent it.
+RB.AddManual("Zed", 19857, 4)
+RB.Refresh()
+check("a change nobody sent shows", rfHead(), "Changed since it was sent")
+
+RollFor.key_bindings.import = function() error("bad data") end
+click(f.send)
+check("a refusal shows", rfHead(), "RollFor refused the list")
+check("with RollFor's reason", string.find(rfBody(), "bad data", 1, true) ~= nil, true)
+fakeRollFor()
+click(f.send)
+check("and clears on the next good send", rfHead(), "In RollFor  sent just now")
+
+click(f.view)
+check("View opens RollFor's own window", VIEWED, true)
+
+print("the RollFor box, after a reload")
+local keepSent, keepDb, keepManual = RaidResBridge_Sent, RollForCharDb, RaidResBridge_Manual
+RB = world()
+RaidResBridge_Sent, RollForCharDb, RaidResBridge_Manual = keepSent, keepDb, keepManual
+CLOCK = CLOCK + 180
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+check("RollFor still holds it", rfHead(), "In RollFor  sent 3 minutes ago")
+
+print("the RollFor box, with nothing to send")
+RB = world()
+FILES["RaidResBridge_data.lua"] = nil
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+check("nothing to send says so", rfHead(), "Nothing to send yet")
+check("and Send has nothing to do", f.send.enabled, false)
+
+-- ================================================================== the minimap button
+print("the minimap button")
+RB = world()
+local b = RB.SetupMinimap()
+check("it is made at login", b ~= nil and b:IsVisible(), true)
+check("named, so pfUI's button bar can gather it", NAMED.ZyllaRaidResMinimapButton, b)
+check("on the minimap", b:GetParent(), Minimap)
+check("in the tracking button's border", b.border.texture, "Interface\\Minimap\\MiniMap-TrackingBorder")
+check("with its icon", b.icon.texture, "Interface\\Icons\\INV_Scroll_03")
+local function at(axis) return math.floor(b.point[axis] + 0.5) end
+check("it starts low on the left", at(4) .. "," .. at(5), "-75,-27")
+
+enter(b)
+check("the tooltip names the addon and version", tipHas("Zylla RaidRes  1.2.0"), true)
+check("the list", tipHas("List  DEMO42  Zul'Gurub"), true)
+check("who's done", tipHas("Players  12 of 15 done"), true)
+check("and RollFor", tipHas("RollFor  Not sent yet"), true)
+check("and how to use it", tipHas("Drag  Move this button"), true)
+
+click(b)
+check("a click opens the window", RB.gui and RB.gui:IsVisible(), true)
+click(b)
+check("and another closes it", RB.gui:IsVisible(), false)
+
+-- dragged round to the top
+Minimap.GetCenter = function() return 1000, 700 end
+Minimap.GetEffectiveScale = function() return 1 end
+CURSOR = { 1000, 900 }
+fire(b, "OnDragStart")
+fire(b, "OnUpdate", 0.1)
+fire(b, "OnDragStop")
+check("dragging moves it round the edge", at(4) .. "," .. at(5), "0,80")
+check("and it stays there", math.floor(RaidResBridge_Options.minimap.angle + 0.5), 90)
+check("the drag lets go", b.scripts.OnUpdate, nil)
+
+-- pfUI's minimap is square: the button runs along its edge instead
+GetMinimapShape = function() return "SQUARE" end
+RaidResBridge_Options.minimap.angle = 10
+RB.PlaceMinimapButton()
+check("on a square minimap it sits on the edge", at(4), 75)
+
+print("the minimap button's menu")
+fire(b, "OnClick", "RightButton")
+check("right-click opens the options", b.menu.ddOpen, true)
+local function menuItem(value)
+    for _, info in ipairs(MENU) do if info.value == value then return info end end
+end
+check("the look follows pfUI by default", menuItem("auto").checked, 1)
+check("pfUI's look needs pfUI", menuItem("pfui").disabled, 1)
+IMPORTED = nil
+pick(menuItem("send"))
+check("Send works from the menu too", IMPORTED ~= nil, true)
+SAID = {}
+pick(menuItem("hide"))
+check("the button can be hidden", b:IsVisible(), false)
+check("and remembers it", RaidResBridge_Options.minimap.hide, true)
+check("saying how to get it back", heard("/rrb minimap"), true)
+SlashCmdList.RAIDRESBRIDGE("minimap")
+check("/rrb minimap brings it back", b:IsVisible(), true)
+
+print("picking the look")
+SAID = {}
+SlashCmdList.RAIDRESBRIDGE("skin blizzard")
+check("/rrb skin sets it", RaidResBridge_Options.skin, "blizzard")
+check("and says so", heard("look set to"), true)
+check("nothing built changes, so no reload", POPUP, nil)
+SlashCmdList.RAIDRESBRIDGE("skin sparkly")
+check("an unknown look is refused", RaidResBridge_Options.skin, "blizzard")
+
 -- ================================================================== pfUI
 print("with pfUI")
 RB = world()
@@ -1172,14 +1354,37 @@ SlashCmdList.RAIDRESBRIDGE("")
 f = RB.gui
 check("pfUI skins it", f.pfui, true)
 check("its frame and three boxes", CALLS.CreateBackdrop >= 4, true)
-check("its six buttons", CALLS.SkinButton, 6)
+check("its seven buttons, the RollFor box's included", CALLS.SkinButton, 7)
 check("both checkboxes", CALLS.SkinCheckbox, 2)
 check("the dropdown", CALLS.SkinDropDown, 1)
 check("both scroll bars", CALLS.SkinScrollbar, 2)
-check("the close button", CALLS.SkinCloseButton, 1)
+check("its close button and each reserve's", CALLS.SkinCloseButton, 5)
+check("and the RollFor box", f.rBox.backdrop ~= nil, true)
+check("rows light flat, as pfUI's lists do", f.pRows[1].hl.blend, "BLEND")
 check("and drops the Blizzard banner", f.header:IsShown(), false)
 click(findRow(f.pRows, "Newbie"))
 check("and still works", RB.player, "Newbie")
+b = RB.SetupMinimap()
+check("the minimap button takes pfUI's look too", b.skin, "pfui")
+check("pfUI's square, not the round border", b.border:IsShown(), false)
+check("on pfUI's backdrop", b.backdrop ~= nil, true)
+
+print("with pfUI, choosing Blizzard's look")
+POPUP = nil
+fire(b, "OnClick", "RightButton")
+pick(menuItem("blizzard"))
+check("a change to what's built asks to reload", POPUP and POPUP.which, "ZYLLARAIDRES_RELOAD")
+StaticPopupDialogs.ZYLLARAIDRES_RELOAD.OnAccept()
+check("and reloads on yes", RELOADED, true)
+-- what the reload builds
+local keepOptions, keepPf = RaidResBridge_Options, pfUI
+RB = world()
+RaidResBridge_Options, pfUI = keepOptions, keepPf
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+check("Blizzard's look, pfUI or not", f.skin, "blizzard")
+check("with its banner", f.header:IsShown(), true)
+check("and the minimap button's border", RB.SetupMinimap().border:IsShown(), true)
 
 print("with a pfUI that breaks")
 RB = world()

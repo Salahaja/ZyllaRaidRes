@@ -339,6 +339,8 @@ SlashCmdList["RAIDRESBRIDGE"] = function(msg)
         say("|cffffffff/rrb load|r imports what was fetched, plus anything typed.")
         say("|cffffffff/rrb lockcontrol|r toggle locking and unlocking from in game (needs the helper script).")
         say("|cffffffff/rrb restart|r restart the helper script's Chrome (if it gets stuck).")
+        say("|cffffffff/rrb minimap|r shows or hides the minimap button.")
+        say("|cffffffff/rrb skin|r auto, blizzard or pfui picks the look (auto: pfUI's when pfUI is loaded).")
         if RB.Http and RB.Http() then
             say("|cff888888Fetching in game (RaidResHttp.dll is loaded).|r")
         else
@@ -381,6 +383,24 @@ SlashCmdList["RAIDRESBRIDGE"] = function(msg)
             say("could not write the restart command.")
         end
         if RB.DrawStatus then RB.DrawStatus() end
+        return
+    end
+
+    if cmd == "minimap" then
+        if RB.ToggleMinimapButton then RB.ToggleMinimapButton() end
+        return
+    end
+
+    if cmd == "skin" or cmd == "look" then
+        local _, _, arg = string.find(msg, "^%s*%S+%s+(%S+)")
+        arg = arg and string.lower(arg)
+        if arg and RB.SetSkin and RB.SetSkin(arg) then
+            say("look set to |cffffffff" .. arg .. "|r.")
+        else
+            local now = RaidResBridge_Options and RaidResBridge_Options.skin or "auto"
+            say("the look is |cffffffff" .. now .. "|r: |cffffffff/rrb skin auto|r, " ..
+                "|cffffffffblizzard|r or |cffffffffpfui|r.")
+        end
         return
     end
 

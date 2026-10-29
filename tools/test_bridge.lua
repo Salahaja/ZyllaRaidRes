@@ -58,6 +58,7 @@ local function freshWorld()
     GetRaidRosterInfo = function() return nil end
     UnitName = function() return "Tester" end
     UnitClass = function() return "Warrior", "WARRIOR" end
+    GetTime = function() return 100 end
     RaidResBridge_Raids = nil
     RaidResBridge_Limit = nil
     WriteCustomFile = function(n, t) FILES[n] = t end
@@ -65,12 +66,13 @@ local function freshWorld()
     RollFor = nil
     RaidResBridge_Data, RaidResBridge_Ref = nil, nil
     RaidResBridge = nil
-    RaidResBridge_Manual = nil
+    RaidResBridge_Manual, RaidResBridge_Sent, RaidResBridge_Options = nil, nil, nil
     dofile(ROOT .. "RaidResBridge.lua")
     RaidResBridge_Names = nil
     dofile(ROOT .. "Names.lua")
     dofile(ROOT .. "Manual.lua")
     dofile(ROOT .. "Gui.lua")
+    dofile(ROOT .. "Minimap.lua")
     return RaidResBridge
 end
 

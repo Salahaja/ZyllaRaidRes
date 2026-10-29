@@ -193,6 +193,31 @@ says so rather than failing quietly. A soft-reserve list that silently does not
 load is worse than one that never loaded, because the raid finds out when the
 loot drops.
 
+**The window's RollFor box says whether RollFor really holds the list.** It
+doesn't assume a send worked. It reads RollFor's own record back
+(`RollForCharDb.softres`, where RollFor 4.x keeps what it imported and when)
+and compares it with what was last sent from here:
+
+| The box says | Meaning |
+|---|---|
+| **In RollFor** · sent 2 minutes ago | RollFor holds exactly this list |
+| **Changed since it was sent** | the list moved on after the last send |
+| **RollFor holds a different list** | something else imported since, e.g. RollFor's own import window |
+| **RollFor's list was cleared** | cleared in RollFor after this was sent |
+| **Not sent to RollFor yet** | nothing sent from here yet |
+| **RollFor refused the list** | the import failed; RollFor's reason is underneath |
+| **RollFor isn't loaded** | reserves wait here until it is |
+
+What was last sent is saved per character, as RollFor's own copy is, so the
+answer holds across a `/reload`. A RollFor that keeps its list elsewhere just
+means the box goes by what was sent.
+
+RollFor answers every import in chat ("Soft-res data loaded successfully!",
+then its soft-res check). After a fetch, or when you press *Send to RollFor*,
+that's the confirmation you asked for, so it shows. The automatic send after
+every click in the window keeps it quiet, because the box already says the
+same thing and the chat would fill up otherwise.
+
 ## The window: `/rrb`
 
 Made for the raid leader ten minutes before the pull, with a roster in front of
@@ -204,7 +229,12 @@ parts so it looks like it shipped with the game:
 - a standard dropdown
 - the client's own class and item colours
 
-With pfUI loaded, it's skinned the way pfUI skins every Blizzard window.
+With pfUI loaded, it's skinned the way pfUI skins every Blizzard window: pfUI's
+backdrops, buttons, checkboxes, scroll bars and close buttons, with rows lit
+flat the way pfUI's own lists are. To keep the Blizzard look under pfUI, pick
+it from the minimap button's menu or type `/rrb skin blizzard`. A change to a
+look that's already on screen asks to reload the UI, which is the only clean
+way to swap it.
 
 ```
                       .-----------------------.
@@ -224,8 +254,14 @@ With pfUI loaded, it's skinned the way pfUI skins every Blizzard window.
 |  +--------------------------------------+   |                                  | |
 |  |  [] Bloodsoaked Legplates        [X] |   |                                  | |
 |  +--------------------------------------+   +----------------------------------+ |
-|  Click loot to reserve it for Newbie (1 left).  [Clear typed] [Send to RollFor] |
-+---------------------------------------------------------------------------+
+|  Click loot to reserve it for Newbie (1 left).                                      |
+|                                                                                     |
+|  RollFor                                                                            |
+|  +--------------------------------------------------------------------------------+ |
+|  | ## In RollFor  sent just now [Clear typed] [View in RollFor] [Send to RollFor] | |
+|  |    15 players, 28 reserves, 1 typed here                                       | |
+|  +--------------------------------------------------------------------------------+ |
++-------------------------------------------------------------------------------------+
 ```
 
 1. **Paste the link** at the top and press Fetch or Enter. The box keeps the
@@ -249,11 +285,34 @@ With pfUI loaded, it's skinned the way pfUI skins every Blizzard window.
 4. **Click loot** to reserve it for them, and click again to take it back.
    Rows they hold get a check mark. When they're full, the rest of the loot
    dims.
-5. **Every change goes to RollFor as you make it.** *Send to RollFor* only
-   sends everything again, e.g. after RollFor was reloaded.
+5. **Every change goes to RollFor as you make it,** and the **RollFor** box at
+   the bottom shows that RollFor has it (see
+   [How it reaches RollFor](#how-it-reaches-rollfor)). *Send to RollFor* sends
+   everything again and lets RollFor report in chat. *View in RollFor* opens
+   RollFor's own soft-res window, so you can see the list the way RollFor has
+   it.
 
-The line at the bottom always says what your next click will do, and answers
+The line under the lists always says what your next click will do, and answers
 when a click is refused.
+
+## The minimap button
+
+The window is one click away, and you can check the night's state without
+opening anything. Hover it for:
+- **List**: the raidres list and its raid
+- **Players**: how many of the raid have all their reserves (*12 of 15 done*)
+- **Raidres**: whether the list is locked
+- **RollFor**: whether RollFor has it (*Up to date*, *Changed, not sent*, ...)
+
+**Left-click** opens or closes the window. **Right-click** opens the menu:
+- *Send to RollFor* and *View in RollFor*
+- **Look**: *Automatic* (pfUI's when pfUI is loaded), *Blizzard* or *pfUI*
+- *Hide this button*. `/rrb minimap` brings it back.
+
+**Drag** moves it around the minimap's edge. That works on the round minimap
+and on pfUI's square one. Where it sits is saved. It uses the client's
+tracking-button border, or pfUI's flat square in pfUI's look. pfUI's
+minimap-button bar can gather it like any other button.
 
 **The loot** is raidres's own table for the instance, grouped by boss and
 coloured by quality, with item icons once the game has seen an item. Who holds
@@ -374,6 +433,8 @@ before, with no errors.
 | `/rrb load` | import what was fetched, plus anything typed |
 | `/rrb lockcontrol` | toggle in-game lock/unlock (manual mode, without RaidResLock.dll) |
 | `/rrb restart` | restart the helper script's Chrome (if it gets stuck) |
+| `/rrb minimap` | show or hide the minimap button |
+| `/rrb skin auto`, `blizzard` or `pfui` | pick the look; `auto` is pfUI's when pfUI is loaded |
 | `/rrb help` | the commands, and how it's fetching |
 | `/rrb debug` | what RaidResHttp.dll is doing right now: requests talking, queued, and the oldest one's age |
 
@@ -387,8 +448,8 @@ failure.
 ```bash
 lua tools/test_bridge.lua   # lists, the merge, typed reserves, names   (139)
 lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (116)
-lua tools/test_gui.lua      # the window, chat links, matching, clicked (288)
-lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Chat.lua
+lua tools/test_gui.lua      # the window, minimap button, RollFor box   (352)
+lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Minimap.lua Chat.lua
 ```
 
 - **The fixtures** in `tools/fixtures` are real raidres replies with the

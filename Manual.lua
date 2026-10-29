@@ -138,33 +138,126 @@ function RB.Merged()
     return data
 end
 
+-- ---------------------------------------------------------------------------
+-- RollFor
+-- ---------------------------------------------------------------------------
+
+function RB.RollForReady()
+    return RollFor and RollFor.key_bindings
+        and type(RollFor.key_bindings.import) == "function" and true or false
+end
+
+--[[ A fingerprint of a list: who holds what, in any order.
+
+     The merge visits the typed reserves with pairs(), so the same list can
+     come out in another order after a reload; a sum over (name, item) pairs
+     doesn't care. Kept with what was sent, so "has RollFor got this list?"
+     survives a /reload. ]]
+function RB.Signature(data)
+    local players, items, sum = 0, 0, 0
+    for _, p in ipairs(data.softreserves or {}) do
+        players = players + 1
+        local k, weight = key(p.name), 0
+        for i = 1, string.len(k) do weight = weight + string.byte(k, i) * i end
+        for _, it in ipairs(p.items or {}) do
+            items = items + 1
+            sum = sum + (it.id or 0) * (weight + 1)
+        end
+    end
+    for _, h in ipairs(data.hardreserves or {}) do sum = sum + (h.id or 0) end
+    local ref = data.metadata and data.metadata.id or ""
+    return ref .. ":" .. players .. ":" .. items .. ":" .. string.format("%.0f", sum),
+        players, items
+end
+
+--[[ What RollFor itself holds. RollFor 4.x keeps the list it imported, and
+     when, in RollForCharDb.softres. Read here, never written. Any other shape
+     returns nil -- "can't tell" -- and the window goes by what it sent. ]]
+function RB.RollForHolds()
+    local db = type(RollForCharDb) == "table" and RollForCharDb.softres
+    if type(db) ~= "table" then return nil end
+    return (db.data ~= nil and db.data ~= "") and true or false, db.import_timestamp
+end
+
+--[[ Where RollFor stands with this list: its signature and how many
+     reserves it has, both from RB.Signature.
+
+       missing  RollFor isn't loaded
+       failed   RollFor refused the last send
+       empty    nothing reserved, so nothing for RollFor to hold
+       synced   RollFor holds exactly this list
+       stale    the list changed after it was sent
+       other    RollFor holds a list sent from somewhere else
+       cleared  RollFor's list was cleared after this one was sent
+       unsent   nothing has been sent from here yet ]]
+function RB.RollForState(sig, reserved)
+    if not RB.RollForReady() then return "missing" end
+    if RB.sendError then return "failed" end
+    if not sig or (reserved or 0) == 0 then return "empty" end
+    local sent = RaidResBridge_Sent
+    local holds, stamp = RB.RollForHolds()
+    if not sent then return holds and "other" or "unsent" end
+    if holds == false then return "cleared" end
+    if holds and stamp and sent.stamp and stamp ~= sent.stamp then return "other" end
+    if sent.sig ~= sig then return "stale" end
+    return "synced"
+end
+
+--[[ RollFor answers every import in chat: "Soft-res data loaded
+     successfully!" and then its soft-res check. After a fetch, or when Send
+     is pressed, that is the confirmation that was asked for. After every
+     click in the window it is a wall of chat saying what the window's RollFor
+     box already says -- so a quiet send keeps RollFor quiet too. ]]
+local function hushed(fn, arg)
+    local chat = DEFAULT_CHAT_FRAME
+    if not chat then return pcall(fn, arg) end
+    local own = rawget(chat, "AddMessage")
+    chat.AddMessage = function() end
+    local ok, err = pcall(fn, arg)
+    -- nil hands the method back to the frame; a chat addon's hook goes back as it was
+    chat.AddMessage = own
+    return ok, err
+end
+
 --- Push the merged list into RollFor.
 function RB.Apply(quiet)
-    local rf = RollFor and RollFor.key_bindings
-    if not rf or type(rf.import) ~= "function" then
+    if not RB.RollForReady() then
         if not quiet then say("|cffff5179RollFor is not loaded|r.") end
         return false
     end
+    local rf = RollFor.key_bindings
     local data = RB.Merged()
-    local players, items = 0, 0
-    for _, p in ipairs(data.softreserves) do
-        players = players + 1
-        items = items + table.getn(p.items)
-    end
+    local sig, players, items = RB.Signature(data)
     if players == 0 then
         if not quiet then say("there is nothing to import yet.") end
         return false
     end
-    local ok, err = pcall(rf.import, data)
+    local ok, err
+    if quiet then ok, err = hushed(rf.import, data) else ok, err = pcall(rf.import, data) end
     if not ok then
-        say("|cffff5179RollFor refused it|r: " .. tostring(err))
+        RB.sendError = tostring(err)
+        say("|cffff5179RollFor refused it|r: " .. RB.sendError)
+        if RB.DrawRollFor then RB.DrawRollFor() end
         return false
     end
+    RB.sendError = nil
+    local _, stamp = RB.RollForHolds()
+    RaidResBridge_Sent = { sig = sig, players = players, items = items,
+                           stamp = stamp, at = time and time() or nil }
+    RB.sentAt = GetTime()
     if not quiet then
         local manual = table.getn(RB.ManualList())
         say("imported |cffffffff" .. players .. "|r player(s), " .. items ..
             " reservation(s)" ..
             (manual > 0 and (" |cff888888(" .. manual .. " added by hand)|r") or "") .. ".")
     end
+    if RB.DrawRollFor then RB.DrawRollFor() end
     return true
+end
+
+--- RollFor's own soft-res window, to see the list as RollFor has it.
+function RB.ViewInRollFor()
+    local rf = RollFor and RollFor.key_bindings
+    if not rf or type(rf.softres_toggle) ~= "function" then return false end
+    return (pcall(rf.softres_toggle))
 end
