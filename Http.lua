@@ -529,6 +529,7 @@ local LOCK_POLL   = 0.5
 local LOCK_TIMEOUT = 15
 
 function RB.LockControlReady()
+    if RaidResLockReady then return RB.FileAPI() end
     return RaidResBridge_LockControl and RB.FileAPI()
 end
 
