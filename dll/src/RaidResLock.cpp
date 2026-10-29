@@ -117,25 +117,10 @@ void StopWatcher() {
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
     }
+    // /T above already took the watcher's own Chrome (a child process); a
+    // blanket chrome.exe kill would close the user's own browser too.
     CloseHandle(g_watcherProcess);
     g_watcherProcess = nullptr;
-
-    // Kill headless Chrome started by the watcher.
-    // Only chrome.exe with our CDP profile, identified by command line.
-    // A blanket kill is acceptable here since the watcher uses a dedicated
-    // profile and this only runs on game exit.
-    _snprintf(cmd, sizeof(cmd), "taskkill /F /IM chrome.exe");
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    ZeroMemory(&pi, sizeof(pi));
-    if (CreateProcessA(nullptr, cmd, nullptr, nullptr, FALSE,
-                       CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
-        WaitForSingleObject(pi.hProcess, 3000);
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-    }
 }
 
 // ---------------------------------------------------------------------------
