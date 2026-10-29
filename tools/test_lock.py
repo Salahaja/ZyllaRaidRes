@@ -61,6 +61,40 @@ check("an error with no words still says so", w.reserve_line({"result": "error"}
       "error: raidres didn't say why")
 check("asking for a spec", w.reserve_line({"result": "needspec"}), "needspec")
 
+print("a new event, as the game sends it")
+from datetime import datetime, timedelta, timezone
+NOW = datetime(2026, 10, 29, 18, 0).astimezone()
+body = w.event_body("95", "2026-11-02", "20:00", "2", "1", "1", "0", "0", "MC Sunday", now=NOW)
+check("the raid and the reserves each", (body["raidId"], body["reservationLimit"]), (95, 2))
+check("the switches", (body["lockAtStartTime"], body["allowComments"], body["allowSrPlus"],
+                       body["allowDuplicateReservation"]), (True, True, False, False))
+check("the description", body["description"], "MC Sunday")
+start = datetime.strptime(body["startTime"], "%Y-%m-%dT%H:%M:%S.000Z").replace(tzinfo=timezone.utc)
+check("the start goes as UTC, the way the form's toISOString() sends it",
+      start.astimezone().strftime("%Y-%m-%d %H:%M"), "2026-11-02 20:00")
+check("ending in Z", body["startTime"].endswith(".000Z"), True)
+check("what the form keeps for later goes empty",
+      (body["advancedHrItems"], body["extraAdministratorUserIdentifiers"], body["forbiddenUserIds"],
+       body["previousRaidEventReference"], body["locked"]), ([], [], [], None, None))
+for label, call in [
+        ("a time already gone", lambda: w.event_body("95", "2026-10-29", "17:00", "1", "0", "1", "0",
+                                                     "0", "", now=NOW)),
+        ("no such day", lambda: w.event_body("95", "2026-02-30", "20:00", "1", "0", "1", "0", "0", "",
+                                             now=NOW)),
+        ("too many reserves each", lambda: w.event_body("95", "2026-11-02", "20:00", "11", "0", "1",
+                                                        "0", "0", "", now=NOW)),
+        ("a switch that isn't 0 or 1", lambda: w.event_body("95", "2026-11-02", "20:00", "1", "yes",
+                                                            "1", "0", "0", "", now=NOW)),
+        ("a bad raid", lambda: w.event_body("x", "2026-11-02", "20:00", "1", "0", "1", "0", "0", "",
+                                            now=NOW))]:
+    try:
+        call()
+        check(label + " is refused", "passed", "refused")
+    except ValueError:
+        check(label + " is refused", "refused", "refused")
+check("a short command is refused before Chrome", w.create_event(["95", "2026-11-02"]),
+      "error: bad command")
+
 # ------------------------------------------------------------------ in a real Chrome
 tmp = tempfile.mkdtemp(prefix="raidres-lock-test-")
 os.environ["LOCALAPPDATA"] = tmp       # its own profile, never the signed-in one
@@ -76,8 +110,8 @@ if not w.start_chrome("about:blank", headless=True):
 tab = next(t for t in w.cdp_tabs() if t.get("type") == "page" and t.get("webSocketDebuggerUrl"))
 ws = w.WebSocket(tab["webSocketDebuggerUrl"])
 
-def run(args, me="1000", event=None, chars=None, reply=None):
-    """Run _RESERVE_JS once against a stand-in site. Returns (answer, sent)."""
+def run(args, me="1000", event=None, chars=None, reply=None, script=None):
+    """Run an in-page script once against a stand-in site. Returns (answer, sent)."""
     site = {
         "me": {"status": 200, "body": {"id": me}} if me else {"status": 401, "body": None},
         "event": {"status": 200, "body": event if event is not None else EVENT},
@@ -95,7 +129,7 @@ def run(args, me="1000", event=None, chars=None, reply=None):
         else if (url.startsWith('/api/events/')) r = site.event;
         else if (url.startsWith('/raids/raid_')) r = site.raid;
         else if (url === '/api/user-characters') r = site.chars;
-        else if (url.startsWith('/api/raid-event-reservations')) {
+        else if (url === '/api/events' || url.startsWith('/api/raid-event-reservations')) {
           window.__sent.push({ url, method: opts.method, body: JSON.parse(opts.body) });
           r = site.reply;
         } else r = { status: 404, body: null };
@@ -108,7 +142,7 @@ def run(args, me="1000", event=None, chars=None, reply=None):
     ws.call("Runtime.evaluate", {"expression": "(%s)(%s)" % (stand_in, json.dumps(site)),
                                  "returnByValue": True})
     out = ws.call("Runtime.evaluate", {
-        "expression": "(%s)(%s)" % (w._RESERVE_JS, json.dumps(args)),
+        "expression": "(%s)(%s)" % (script or w._RESERVE_JS, json.dumps(args)),
         "awaitPromise": True, "returnByValue": True})
     value = out.get("result", {}).get("result", {}).get("value")
     if not isinstance(value, str):
@@ -208,6 +242,25 @@ try:
     answer, sent = run(args(HELD, "Aldwyn", remove=True), me="9999", event=OPEN)
     check("nor someone else's", answer["message"], "Aldwyn hasn't reserved that on raidres")
     check("and nothing is sent for them", sent, [])
+    print("a new event, in a real page")
+    body = w.event_body("95", "2099-11-02", "20:00", "1", "0", "1", "0", "0", "test")
+    answer, sent = run({"body": body, "dry": False}, script=w._CREATE_JS,
+                       reply={"status": 201, "body": {"reference": "NEW123", "raidId": 95}})
+    check("it is created", answer, {"result": "ok", "done": "created", "reference": "NEW123"})
+    check("with one POST of the form's fields", [(x["method"], x["url"], x["body"]) for x in sent],
+          [("POST", "/api/events", body)])
+    answer, sent = run({"body": body, "dry": True}, script=w._CREATE_JS)
+    check("a dry run plans it", (answer["result"], answer["body"]), ("plan", body))
+    check("and sends nothing", sent, [])
+    answer, sent = run({"body": body, "dry": False}, script=w._CREATE_JS, me=None)
+    check("signed out says so, and sends nothing", (answer["result"], sent), ("signin", []))
+    answer, sent = run({"body": body, "dry": False}, script=w._CREATE_JS,
+                       reply={"status": 400, "body": {"message": "Start time must be in the future"}})
+    check("raidres's refusal in its words", answer,
+          {"result": "error", "message": "Start time must be in the future"})
+    answer, sent = run({"body": body, "dry": False}, script=w._CREATE_JS,
+                       reply={"status": 201, "body": {}})
+    check("a reply with no link says so", answer["message"], "raidres made it but didn't say its link")
 finally:
     ws.close()
     w.kill_chrome()

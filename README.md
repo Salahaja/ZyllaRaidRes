@@ -493,6 +493,43 @@ it:
 python tools/raidres_lock.py reserve WW8CK7 19137 Salahaja Paladin --dry-run
 ```
 
+## A new event, from in game
+
+The raid leader's side: **make the raidres event without leaving the game.**
+Like reserving, it goes through RaidResLock.dll and the signed-in Chrome.
+
+Open it with `/rrb new`, from **New event...** at the bottom of the arrow beside
+the link box, or from the minimap button's menu. It asks for what raidres's own
+*Create event* form asks for:
+
+- **Raid**: grouped by size the way raidres groups it (40-man, 20-man, 10-man,
+  world boss), from raidres's own raid list. Without RaidResHttp.dll it offers
+  the raids whose loot tables are cached.
+- **Starts**: a day in the next two weeks, and an hour and quarter. This is on
+  your own clock, the same as raidres's site in a browser; it's sent as the UTC
+  raidres stores.
+- **Reserves each.**
+- **Lock at the start time**, **Allow comments**, **Use SR+**, and **Same item
+  twice**.
+- **Description.**
+
+**Create event** makes it. The new link goes into the window's box and is
+fetched, and you're asked whether to post it in raid (or party) chat as one
+line. Anyone else running the addon gets it as a clickable link. The choices
+are remembered for next time.
+
+Hard reserves, extra admins and banned users are left to raidres's site: each
+is a list to manage there, not a field here. A time already gone is refused
+before anything is sent. Anything raidres refuses comes back in its own words,
+and the dialog stays open to fix it.
+
+From a terminal, `tools/raidres_lock.py create` does the same, and `--dry-run`
+shows what it would send:
+
+```bash
+python tools/raidres_lock.py create 95 2026-11-01 20:00 1 1 1 0 0 MC Sunday --dry-run
+```
+
 ## Commands
 
 | | |
@@ -502,6 +539,7 @@ python tools/raidres_lock.py reserve WW8CK7 19137 Salahaja Paladin --dry-run
 | `/rrb load` | import what was fetched, plus anything typed |
 | `/rrb lockcontrol` | toggle in-game lock/unlock (manual mode, without RaidResLock.dll) |
 | `/rrb restart` | restart the helper script's Chrome (if it gets stuck) |
+| `/rrb new` | make a new raidres event (needs RaidResLock.dll) |
 | `/rrb minimap` | show or hide the minimap button |
 | `/rrb skin auto`, `blizzard` or `pfui` | pick the look; `auto` is pfUI's when pfUI is loaded |
 | `/rrb help` | the commands, and how it's fetching |
@@ -517,9 +555,9 @@ failure.
 ```bash
 lua tools/test_bridge.lua   # lists, the merge, typed reserves, names   (139)
 lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (118)
-lua tools/test_gui.lua      # the window, minimap button, RollFor box   (397)
-python tools/test_lock.py   # reserving on raidres, in a throwaway Chrome (41)
-lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Minimap.lua Chat.lua
+lua tools/test_gui.lua      # the window, minimap, RollFor box, events  (444)
+python tools/test_lock.py   # reserving and events, in a throwaway Chrome (60)
+lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Event.lua Minimap.lua Chat.lua
 ```
 
 - **The fixtures** in `tools/fixtures` are real raidres replies with the

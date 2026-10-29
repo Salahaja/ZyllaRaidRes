@@ -185,7 +185,7 @@ end
 
 -- ------------------------------------------------------------------ the world
 local SAID, FILES, IMPORTED, POPUP, NOW, SHIFT, CTRL, CACHED, TIP, DRESSED
-local ROSTER, SOUNDS, SHOWN, REFS, CLOCK, CURSOR, VIEWED, RELOADED
+local ROSTER, SOUNDS, SHOWN, REFS, CLOCK, CURSOR, VIEWED, RELOADED, CHAT
 
 --[[ RollFor 4.x as far as this addon meets it: import says so in chat and
      keeps the list, and when, in RollForCharDb.softres -- unless nobody
@@ -223,6 +223,10 @@ local function world(withoutNames)
     TIP = { lines = {} }
     CLOCK, CURSOR, VIEWED, RELOADED = 1700000000, { 0, 0 }, false, false
     time = function() return CLOCK end
+    -- the client's date(), on the same stopped clock as time()
+    date = function(fmt, t) return os.date(fmt, t or CLOCK) end
+    CHAT = {}
+    SendChatMessage = function(text, channel) table.insert(CHAT, { text = text, channel = channel }) end
     ReloadUI = function() RELOADED = true end
     GetCursorPosition = function() return CURSOR[1], CURSOR[2] end
     DEFAULT_CHAT_FRAME = { AddMessage = function(_, m) table.insert(SAID, m) end }
@@ -287,6 +291,7 @@ local function world(withoutNames)
     if not withoutNames then dofile(ROOT .. "Names.lua") end
     dofile(ROOT .. "Manual.lua")
     dofile(ROOT .. "Gui.lua")
+    dofile(ROOT .. "Event.lua")
     dofile(ROOT .. "Minimap.lua")
     dofile(ROOT .. "Chat.lua")
     return RaidResBridge
@@ -1402,6 +1407,139 @@ click(firstItemRow(f))
 check("without the lock helper, yours are typed too", RaidResBridge_Manual.tester ~= nil, true)
 check("and the hint doesn't promise raidres", string.find(hint(f), "on raidres", 1, true), nil)
 
+-- ================================================================== a new event
+print("a new event")
+RB = world()
+SAID = {}
+SlashCmdList.RAIDRESBRIDGE("new")
+check("without the lock helper, /rrb new says what it needs", heard("needs RaidResLock.dll"), true)
+check("and opens nothing", RB.eventFrame, nil)
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+click(f.recent)
+check("the Recent menu offers one, greyed without the helper",
+    plain(MENU[table.getn(MENU)].text) .. " " .. tostring(MENU[table.getn(MENU)].disabled),
+    "New event... (needs RaidResLock.dll) 1")
+
+RaidResLockReady = function() return 1 end
+click(f.recent)
+local newEntry = MENU[table.getn(MENU)]
+check("with it, the Recent menu ends with a new event", plain(newEntry.text), "New event...")
+check("ready to pick", newEntry.disabled, nil)
+pick(newEntry)
+local ev = RB.eventFrame
+check("which opens the dialog", ev and ev:IsVisible(), true)
+check("titled on the dialog header", ev and ev.title:GetText(), "New raidres event")
+local escapes = false
+for _, n in ipairs(UISpecialFrames) do if n == "ZyllaRaidResEventFrame" then escapes = true end end
+check("Escape closes it", escapes, true)
+check("the raid starts as the window's", ev.raid.ddText, "Zul'Gurub")
+check("today", string.find(ev.day.ddText, "Today, ", 1, true) == 1, true)
+check("at 20:00", ev.hour.ddText .. ":" .. ev.minute.ddText, "20:00")
+check("one reserve each, as raidres's form starts", ev.limit.ddText, "1")
+check("comments on and the rest off, as raidres's form starts",
+    tostring(ev.comments:GetChecked()) .. tostring(ev.lock:GetChecked()) ..
+    tostring(ev.srplus:GetChecked()) .. tostring(ev.dupes:GetChecked()), "1nilnilnil")
+
+local function entry(menu, value)
+    for _, info in ipairs(menu) do if info.value == value then return info end end
+end
+local raids = openMenu(ev.raid)
+check("without the DLL, the cached raids, in one group", raids[1].isTitle, nil)
+pick(entry(raids, 94))
+check("a raid is picked", ev.raid.ddText, "Blackwing Lair")
+local days = openMenu(ev.day)
+check("two weeks of days", table.getn(days), 14)
+check("tomorrow second", string.find(days[2].text, "Tomorrow, ", 1, true) == 1, true)
+pick(days[2])
+pick(entry(openMenu(ev.hour), 19))
+pick(entry(openMenu(ev.minute), 30))
+pick(entry(openMenu(ev.limit), 2))
+ev.lock:SetChecked(1)
+fire(ev.lock, "OnClick")
+ev.desc:SetText("BWL night, bring an Onyxia cloak")
+local CMD, RESULT = "RaidResBridge_lock_cmd.txt", "RaidResBridge_lock_result.txt"
+FILES[CMD] = nil
+click(ev.create)
+local tomorrow = os.date("%Y-%m-%d", CLOCK + 86400)
+check("Create sends the form to the helper", FILES[CMD],
+    "create 94 " .. tomorrow .. " 19:30 2 1 1 0 0 BWL night, bring an Onyxia cloak")
+check("and says it's working on it", plain(ev.status:GetText()), "Creating it on raidres...")
+check("not twice", ev.create.enabled, false)
+
+FILES["RaidResBridge_request.txt"] = nil
+FILES[RESULT] = "ok created NEW777"
+run(1)
+check("made: the dialog closes", ev:IsVisible(), false)
+check("its link goes in the window's box", f.link:GetText(), "https://raidres.top/res/NEW777")
+check("and it is fetched", FILES["RaidResBridge_request.txt"], "NEW777")
+check("the raid is offered the link", POPUP and POPUP.which, "ZYLLARAIDRES_POST")
+check("saying where it would go", POPUP and POPUP.arg, "https://raidres.top/res/NEW777")
+StaticPopupDialogs.ZYLLARAIDRES_POST.OnAccept()
+check("Post says it in raid chat, once", table.getn(CHAT), 1)
+check("as one plain line", CHAT[1] and (CHAT[1].channel .. ": " .. CHAT[1].text),
+    "RAID: Soft reserves are open: https://raidres.top/res/NEW777 (Blackwing Lair)")
+
+print("a new event, next time")
+SlashCmdList.RAIDRESBRIDGE("new")
+check("it starts from last time's choices",
+    ev.raid.ddText .. " " .. ev.hour.ddText .. ":" .. ev.minute.ddText .. " x" .. ev.limit.ddText,
+    "Blackwing Lair 19:30 x2")
+check("with the lock still on", ev.lock:GetChecked(), 1)
+check("and the description", ev.desc:GetText(), "BWL night, bring an Onyxia cloak")
+pick(openMenu(ev.day)[1])
+pick(entry(openMenu(ev.hour), 0))
+pick(entry(openMenu(ev.minute), 0))
+FILES[CMD] = nil
+click(ev.create)
+check("a time already gone is refused here", plain(ev.status:GetText()), "That time has already passed.")
+check("and nothing is sent", FILES[CMD], nil)
+pick(days[3])
+click(ev.create)
+FILES[RESULT] = "error: Start time must be in the future"
+run(1)
+check("raidres's refusal shows in the dialog, in its words",
+    plain(ev.status:GetText()), "raidres: Start time must be in the future")
+check("which stays open to fix it", ev:IsVisible(), true)
+check("and can try again", ev.create.enabled, true)
+click(ev.create)
+FILES[RESULT] = "signin"
+run(1)
+check("a lapsed sign-in says what to do",
+    string.find(plain(ev.status:GetText()), "Click Sign in", 1, true) ~= nil, true)
+RB.sessionExpired = nil
+click(ev.create)
+run(46)
+check("a helper that never answers is given up on",
+    string.find(plain(ev.status:GetText()), "did not answer", 1, true) ~= nil, true)
+check("and Create works again", ev.create.enabled, true)
+
+print("a new event, with the DLL")
+RB = world()
+RaidResLockReady = function() return 1 end
+fakeDll()
+PAGES["/raids/raids.json"] = { body = '[' ..
+    '{"id":95,"name":"Molten Core","raidType":"RAID40","maxAttendance":40,"game":"TURTLE"},' ..
+    '{"id":116,"name":"Azuregos","raidType":"WORLDBOSS","maxAttendance":40,"game":"TURTLE"},' ..
+    '{"id":101,"name":"Lower Karazhan Halls","raidType":"RAID10","maxAttendance":10,"game":"TURTLE"},' ..
+    '{"id":100,"name":"Zul\'Gurub","raidType":"RAID20","maxAttendance":20,"game":"TURTLE"},' ..
+    '{"id":94,"name":"Blackwing Lair","raidType":"RAID40","maxAttendance":40,"game":"TURTLE"},' ..
+    '{"id":7,"name":"Karazhan","raidType":"RAID10","maxAttendance":10,"game":"TBC"}]' }
+SlashCmdList.RAIDRESBRIDGE("new")
+ev = RB.eventFrame
+run(1)
+check("raidres's own raid list is asked for", ASKED[1], "/raids/raids.json")
+local grouped = {}
+for _, info in ipairs(openMenu(ev.raid)) do table.insert(grouped, plain(info.text)) end
+check("grouped by size the way raidres groups them, this game's only",
+    table.concat(grouped, ", "),
+    "40-man, Blackwing Lair, Molten Core, 20-man, Zul'Gurub, 10-man, Lower Karazhan Halls, " ..
+    "World boss, Azuregos")
+check("the group names can't be picked", openMenu(ev.raid)[1].isTitle, 1)
+SlashCmdList.RAIDRESBRIDGE("new")
+run(1)
+check("and asked for once a session", table.getn(ASKED), 1)
+
 -- ================================================================== the minimap button
 print("the minimap button")
 RB = world()
@@ -1494,6 +1632,16 @@ check("the dropdown", CALLS.SkinDropDown, 1)
 check("both scroll bars", CALLS.SkinScrollbar, 2)
 check("its close button and each reserve's", CALLS.SkinCloseButton, 5)
 check("the Recent arrow", CALLS.SkinArrowButton, 1)
+RaidResLockReady = function() return 1 end
+local buttonsBefore = CALLS.SkinButton
+SlashCmdList.RAIDRESBRIDGE("new")
+check("the New event dialog takes pfUI's look too", RB.eventFrame and RB.eventFrame.pfui, true)
+check("its own buttons, not the window's again", CALLS.SkinButton - buttonsBefore, 2)
+check("its five dropdowns", CALLS.SkinDropDown, 1 + 5)
+check("its four checkboxes", CALLS.SkinCheckbox, 2 + 4)
+check("without the Blizzard banner", RB.eventFrame.header:IsShown(), false)
+RB.eventFrame:Hide()
+RaidResLockReady = nil
 check("and the RollFor box", f.rBox.backdrop ~= nil, true)
 check("rows light flat, as pfUI's lists do", f.pRows[1].hl.blend, "BLEND")
 check("and drops the Blizzard banner", f.header:IsShown(), false)

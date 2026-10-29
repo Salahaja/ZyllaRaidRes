@@ -1063,6 +1063,11 @@ local function scrollFrame(parent, name, w, rows, top)
     return sf
 end
 
+-- The same parts for the window's dialogs (Event.lua), so they match it.
+RB.UI = { text = text, box = box, button = button, checkbox = checkbox,
+          editBox = editBox, part = part, DIALOG = DIALOG,
+          GOLD = GOLD, WHITE = WHITE, GREY = GREY, RED = RED, GREEN = GREEN, hex = hex }
+
 -- ---------------------------------------------------------------------------
 -- Building it
 -- ---------------------------------------------------------------------------
@@ -1536,6 +1541,25 @@ function RB.SkinForPfUI(f)
     return ok
 end
 
+--[[ A dialog in the window's own look: build() makes it -- a frame with a
+     header, title and close button, as the window has -- from RB.UI's parts,
+     which are kept apart from the window's while it runs. Then the window's
+     skin goes over the dialog's parts alone. ]]
+function RB.BuildDialog(build)
+    local saved = parts
+    parts = {}
+    for kind in pairs(saved) do parts[kind] = {} end
+    local ok, f = pcall(build)
+    if ok and f then
+        f.pfui = false
+        if RB.SkinName() == "pfui" then f.pfui = RB.SkinForPfUI(f) end
+        f.skin = f.pfui and "pfui" or "blizzard"
+    end
+    parts = saved
+    if not ok then error(f, 0) end
+    return f
+end
+
 function RB.BuildGui()
     if RB.gui then return RB.gui end
 
@@ -1958,12 +1982,18 @@ local function onPickRecent()
     if CloseDropDownMenus then CloseDropDownMenus() end
     local f = RB.gui
     if not f or not this.value then return end
+    if this.value == "new" then
+        RB.OpenNewEvent()
+        return
+    end
     f.link:SetText("https://raidres.top/res/" .. this.value)
     RB.FetchFromBox()
 end
 
 --[[ The Recent menu, built each time it opens: the last lists fetched,
-     newest first, the one loaded now checked. Picking one fetches it. ]]
+     newest first, the one loaded now checked. Picking one fetches it. At
+     the bottom, a new one -- the way the loot dropdown ends with getting
+     the loot tables. ]]
 function RB.InitRecentMenu()
     local recent = RaidResBridge_Recent or {}
     local s = RB.gui and RB.gui.snap
@@ -1977,7 +2007,6 @@ function RB.InitRecentMenu()
         info.text = "None yet: fetch a list first."
         info.disabled = 1
         UIDropDownMenu_AddButton(info)
-        return
     end
     local now = time and time()
     for i = 1, table.getn(recent) do
@@ -1988,6 +2017,19 @@ function RB.InitRecentMenu()
         info.value = r.ref
         info.func = onPickRecent
         info.checked = (current == string.lower(r.ref)) and 1 or nil
+        UIDropDownMenu_AddButton(info)
+    end
+    if RB.OpenNewEvent then
+        info = {}
+        info.value = "new"
+        info.func = onPickRecent
+        -- made by the lock helper, in the signed-in Chrome
+        if RB.LockControlReady and RB.LockControlReady() then
+            info.text = hex(GREEN, "New event...")
+        else
+            info.text = "New event... (needs RaidResLock.dll)"
+            info.disabled = 1
+        end
         UIDropDownMenu_AddButton(info)
     end
 end

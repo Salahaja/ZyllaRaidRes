@@ -358,6 +358,7 @@ SlashCmdList["RAIDRESBRIDGE"] = function(msg)
         say("|cffffffff/rrb load|r imports what was fetched, plus anything typed.")
         say("|cffffffff/rrb lockcontrol|r toggle locking and unlocking from in game (needs the helper script).")
         say("|cffffffff/rrb restart|r restart the helper script's Chrome (if it gets stuck).")
+        say("|cffffffff/rrb new|r makes a new raidres event (needs RaidResLock.dll).")
         say("|cffffffff/rrb minimap|r shows or hides the minimap button.")
         say("|cffffffff/rrb skin|r auto, blizzard or pfui picks the look (auto: pfUI's when pfUI is loaded).")
         if RB.Http and RB.Http() then
@@ -402,6 +403,11 @@ SlashCmdList["RAIDRESBRIDGE"] = function(msg)
             say("could not write the restart command.")
         end
         if RB.DrawStatus then RB.DrawStatus() end
+        return
+    end
+
+    if cmd == "new" or cmd == "event" then
+        if RB.OpenNewEvent then RB.OpenNewEvent() end
         return
     end
 

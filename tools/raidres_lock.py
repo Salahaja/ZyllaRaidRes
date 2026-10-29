@@ -24,6 +24,10 @@ Usage
                                         your own soft reserve on event REF,
                                         by WoW item id; --dry-run looks
                                         everything up and sends nothing
+  python raidres_lock.py create RAIDID YYYY-MM-DD HH:MM LIMIT LOCK COMMENTS SRPLUS DUPES
+                                [DESCRIPTION...] [--dry-run]
+                                        a new event; switches are 0/1, the
+                                        time this PC's; prints its reference
 """
 
 import http.client, json, os, socket, struct, sys, time, re
@@ -439,9 +443,9 @@ SPECS = {
 # A character name as the game writes it: letters, accented ones included.
 _NAME_RE = re.compile(r"^[^\W\d_]{2,24}$")
 
-# Answers one JSON object: {result: ok|needspec|signin|plan|error, ...}.
-_RESERVE_JS = r"""
-async (a) => {
+# Shared by the in-page scripts below. send() answers {fail, reply}: fail is
+# null when raidres took it, else the answer to hand back as it is.
+_PAGE_HELPERS = r"""
   const answer = (o) => JSON.stringify(o);
   // raidres's own error text, read the way its errorMessageParser reads it
   const said = (d) => {
@@ -461,14 +465,24 @@ async (a) => {
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     let reply = null;
     try { reply = await r.json(); } catch (e) {}
-    if (r.ok) return null;
-    if (r.status === 401) return answer({ result: 'signin' });
-    return answer({ result: 'error', message: said(reply) || ('raidres said HTTP ' + r.status) });
+    if (r.ok) return { fail: null, reply };
+    if (r.status === 401) return { fail: answer({ result: 'signin' }), reply };
+    return { fail: answer({ result: 'error', message: said(reply) || ('raidres said HTTP ' + r.status) }),
+             reply };
   };
+  const signedIn = async () => {
+    const me = await get('/api/auth/me');
+    const who = me.body && (me.body.id != null ? me.body.id : (me.body.user && me.body.user.id));
+    return me.ok && who != null ? who : null;
+  };
+"""
 
-  const me = await get('/api/auth/me');
-  const who = me.body && (me.body.id != null ? me.body.id : (me.body.user && me.body.user.id));
-  if (!me.ok || who == null) return answer({ result: 'signin' });
+# Answers one JSON object: {result: ok|needspec|signin|plan|error, ...}.
+_RESERVE_JS = r"""
+async (a) => {
+""" + _PAGE_HELPERS + r"""
+  const who = await signedIn();
+  if (who == null) return answer({ result: 'signin' });
 
   const ev = await get('/api/events/' + encodeURIComponent(a.ref));
   if (!ev.ok || !ev.body) return answer({ result: 'error', message: 'raidres has no list ' + a.ref });
@@ -490,7 +504,7 @@ async (a) => {
     const row = held.filter(r => ids.includes(r.raidItemId)).pop();
     if (!row) return answer({ result: 'error', message: a.name + " hasn't reserved that on raidres" });
     if (a.dry) return answer({ result: 'plan', method: 'DELETE', id: row.id });
-    return (await send('/api/raid-event-reservations/' + row.id, 'DELETE', row.id))
+    return (await send('/api/raid-event-reservations/' + row.id, 'DELETE', row.id)).fail
       || answer({ result: 'ok', done: 'removed' });
   }
 
@@ -519,7 +533,7 @@ async (a) => {
     characterClass: a.cls, specialization: spec, isTemporary: false, raidItemIds: [ids[0]], comment: '' };
   if (a.dry) return answer({ result: 'plan', method: 'POST', body, me: who, held: held.length,
     limit: e.reservationLimit });
-  return (await send('/api/raid-event-reservations', 'POST', body))
+  return (await send('/api/raid-event-reservations', 'POST', body)).fail
     || answer({ result: 'ok', done: 'reserved', spec });
 }
 """
@@ -584,6 +598,127 @@ def reserve(ref, item, name, cls, spec=None, remove=False, dry=False):
             err = reply.get("result", {}).get("exceptionDetails", {})
             return "error: CDP eval failed: %s" % json.dumps(err)[:200]
         line = reserve_line(json.loads(value))
+        if line == "signin":
+            expiry = _format_expiry(_get_expiry(ws))
+            return "signin %s" % expiry if expiry else "signin"
+        return line
+    finally:
+        ws.close()
+
+# ---------------------------------------------------------------------------
+# A new event
+#
+# POST /api/events with the fields raidres's own "Create event" form sends.
+# Its reply carries the new event's reference. What that form keeps for
+# later (hard reserves, extra admins, banned users, a previous event for
+# SR+) is sent empty, as the form sends it untouched; raidres's site edits
+# them afterwards.
+# ---------------------------------------------------------------------------
+
+_CREATE_JS = r"""
+async (a) => {
+""" + _PAGE_HELPERS + r"""
+  if (await signedIn() == null) return answer({ result: 'signin' });
+  if (a.dry) return answer({ result: 'plan', method: 'POST', body: a.body });
+  const r = await send('/api/events', 'POST', a.body);
+  if (r.fail) return r.fail;
+  const ref = r.reply && r.reply.reference;
+  if (!ref) return answer({ result: 'error', message: "raidres made it but didn't say its link" });
+  return answer({ result: 'ok', done: 'created', reference: ref });
+}
+"""
+
+_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_CLOCK_RE = re.compile(r"^\d{2}:\d{2}$")
+
+def event_body(raid_id, day, clock, limit, lock, comments, srplus, dupes, description,
+               now=None):
+    """The create form's fields from what the game sent; raises ValueError.
+
+    The date and time are the player's own clock, as the game shows it and
+    as raidres's form takes them in a browser on this same machine; raidres
+    stores UTC, so they go as UTC, the way the form's toISOString() sends
+    them."""
+    from datetime import datetime, timezone
+    try:
+        raid_id, limit = int(raid_id), int(limit)
+    except (TypeError, ValueError):
+        raise ValueError("bad raid or limit")
+    if raid_id <= 0:
+        raise ValueError("bad raid id: %r" % raid_id)
+    if not 1 <= limit <= 10:
+        raise ValueError("reserves each must be 1 to 10, not %d" % limit)
+    if not (_DAY_RE.match(day or "") and _CLOCK_RE.match(clock or "")):
+        raise ValueError("bad date or time: %r %r" % (day, clock))
+    flags = (lock, comments, srplus, dupes)
+    if any(f not in ("0", "1") for f in flags):
+        raise ValueError("bad switches: %r" % (flags,))
+    try:
+        start = datetime.strptime(day + " " + clock, "%Y-%m-%d %H:%M").astimezone()
+    except ValueError:
+        raise ValueError("no such date or time: %s %s" % (day, clock))
+    now = now or datetime.now().astimezone()
+    if (start - now).total_seconds() < -300:
+        raise ValueError("that time has already passed")
+    description = (description or "").strip()
+    if len(description) > 500:
+        raise ValueError("the description is too long")
+    return {
+        "raidId": raid_id,
+        "description": description,
+        "startTime": start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "reservationLimit": limit,
+        "allowDuplicateReservation": dupes == "1",
+        "lockAtStartTime": lock == "1",
+        "lockMinutesBeforeStartTime": 0,
+        "locked": None,
+        "advancedHrItems": [],
+        "extraAdministratorUserIdentifiers": [],
+        "allowComments": comments == "1",
+        "minimumAccountAge": 0,
+        "forbiddenUserIds": [],
+        "allowSrPlus": srplus == "1",
+        "previousRaidEventReference": None,
+        "allowSrPlusInput": True,
+        "defaultSrPlusIncrease": 0,
+        "srPlusAllowEventSkipCount": 0,
+        "requireSrPlusValidation": False,
+    }
+
+def create_event(words, dry=False):
+    """create RAIDID YYYY-MM-DD HH:MM LIMIT LOCK COMMENTS SRPLUS DUPES [DESCRIPTION...]"""
+    if len(words) < 8:
+        return "error: bad command"
+    try:
+        body = event_body(*(words[:8] + [" ".join(words[8:])]))
+    except ValueError as e:
+        return "error: %s" % e
+    if not ensure_chrome("https://raidres.top/"):
+        return "error: could not start Chrome"
+    tab = find_raidres_tab()
+    if not tab:
+        log("no raidres.top tab in Chrome -- opening one")
+        tab = open_raidres_tab()
+        if not tab or not tab.get("webSocketDebuggerUrl"):
+            return "error: could not open a raidres tab in Chrome"
+    ws = WebSocket(tab["webSocketDebuggerUrl"])
+    try:
+        reply = ws.call("Runtime.evaluate", {
+            "expression": "(%s)(%s)" % (_CREATE_JS, json.dumps({"body": body, "dry": bool(dry)})),
+            "awaitPromise": True,
+            "returnByValue": True,
+        }, timeout=45)
+        value = reply.get("result", {}).get("result", {}).get("value")
+        if not isinstance(value, str):
+            err = reply.get("result", {}).get("exceptionDetails", {})
+            return "error: CDP eval failed: %s" % json.dumps(err)[:200]
+        answer = json.loads(value)
+        if answer.get("result") == "ok":
+            ref = str(answer.get("reference", ""))
+            if not _REF_RE.match(ref):
+                return "error: raidres answered with a strange link: %r" % ref[:40]
+            return "ok created %s" % ref
+        line = reserve_line(answer)
         if line == "signin":
             expiry = _format_expiry(_get_expiry(ws))
             return "signin %s" % expiry if expiry else "signin"
@@ -695,8 +830,17 @@ def watch(parent=None):
                     line = f.read().strip()
                 os.remove(cmd_path)
 
-                # reserve REF ITEM NAME CLASS [SPEC]  /  unreserve REF ITEM NAME
                 words = line.split()
+                # create RAIDID DAY TIME LIMIT LOCK COMMENTS SRPLUS DUPES [DESCRIPTION]
+                if words and words[0] == "create":
+                    log("create %s ..." % " ".join(words[1:4]))
+                    result = create_event(words[1:])
+                    log("  -> %s" % result)
+                    with open(result_path, "w", encoding="utf-8") as f:
+                        f.write(result)
+                    continue
+
+                # reserve REF ITEM NAME CLASS [SPEC]  /  unreserve REF ITEM NAME
                 if words and words[0] in ("reserve", "unreserve"):
                     remove = words[0] == "unreserve"
                     if (remove and len(words) != 4) or (not remove and len(words) not in (5, 6)):
@@ -820,9 +964,21 @@ def main():
         print(result)
         sys.exit(0 if result.startswith(("ok", "plan")) else 1)
 
+    elif cmd == "create":
+        dry = "--dry-run" in args
+        words = [w for w in args[1:] if w != "--dry-run"]
+        if len(words) < 8:
+            print("usage: raidres_lock.py create RAIDID YYYY-MM-DD HH:MM LIMIT LOCK COMMENTS "
+                  "SRPLUS DUPES [DESCRIPTION...] [--dry-run]")
+            print("       LOCK, COMMENTS, SRPLUS and DUPES are 0 or 1; the time is this PC's.")
+            sys.exit(1)
+        result = create_event(words, dry=dry)
+        print(result)
+        sys.exit(0 if result.startswith(("ok", "plan")) else 1)
+
     else:
         print("unknown command: %s" % cmd)
-        print("try: watch, status, lock REF, unlock REF, open REF, reserve, unreserve")
+        print("try: watch, status, lock REF, unlock REF, open REF, reserve, unreserve, create")
         sys.exit(1)
 
 if __name__ == "__main__":

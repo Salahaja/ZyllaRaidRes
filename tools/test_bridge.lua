@@ -73,6 +73,7 @@ local function freshWorld()
     dofile(ROOT .. "Names.lua")
     dofile(ROOT .. "Manual.lua")
     dofile(ROOT .. "Gui.lua")
+    dofile(ROOT .. "Event.lua")
     dofile(ROOT .. "Minimap.lua")
     return RaidResBridge
 end

@@ -1,0 +1,456 @@
+--[[ A new raidres event, from in game.
+
+     raidres's own "Create event" form, made of the client's parts:
+       - the raid, grouped by size the way raidres groups it;
+       - the day and the time, on this PC's clock;
+       - how many soft reserves each;
+       - the switches a raid leader reaches for;
+       - a description.
+     The lock helper makes the event in the signed-in Chrome, exactly as
+     the form would. Then its link goes into the window's box, the list is
+     fetched, and the raid can be told in chat.
+
+     What the form keeps for later -- hard reserves, extra admins, banned
+     users -- is left to raidres's site, where each is a list to manage
+     rather than one field.
+
+     The choices are remembered (RaidResBridge_NewEvent), because next
+     week's event is usually this week's. Every menu entry's func reads
+     this.value; nothing is captured from a loop. ]]
+
+local RB = RaidResBridge
+local UI            -- RB.UI, once Gui.lua has made it
+
+local W, H = 360, 344
+local EDGE = 20
+local COL = EDGE + 88       -- where the controls start, after their labels
+
+local HEADER = "Interface\\DialogFrame\\UI-DialogBox-Header"
+
+-- raidres's raid kinds, in the order its own picker shows them.
+local KINDS = {
+    { kind = "RAID40", name = "40-man" },
+    { kind = "RAID25", name = "25-man" },
+    { kind = "RAID20", name = "20-man" },
+    { kind = "RAID10", name = "10-man" },
+    { kind = "WORLDBOSS", name = "World boss" },
+}
+local MINUTES = { 0, 15, 30, 45 }
+local DAYS = 14
+local MOST = 6              -- reserves each, at most, on offer here
+
+local function say(msg)
+    DEFAULT_CHAT_FRAME:AddMessage("|cff8fd3ffRaidRes|r: " .. msg)
+end
+
+local function remembered()
+    RaidResBridge_NewEvent = RaidResBridge_NewEvent or {}
+    return RaidResBridge_NewEvent
+end
+
+local function byName(a, b) return a.name < b.name end
+
+--[[ The raids to offer, as menu rows: raidres's own list, grouped by kind,
+     once the DLL has fetched it; until then, or without the DLL, whichever
+     loot tables are cached, in one group. ]]
+function RB.EventRaids()
+    local rows = {}
+    if RB.raidList then
+        for _, k in ipairs(KINDS) do
+            local group = {}
+            for _, r in ipairs(RB.raidList) do
+                if r.kind == k.kind then table.insert(group, r) end
+            end
+            table.sort(group, byName)
+            if table.getn(group) > 0 then
+                table.insert(rows, { title = k.name })
+                for _, r in ipairs(group) do table.insert(rows, { id = r.id, name = r.name }) end
+            end
+        end
+        return rows
+    end
+    for id, raid in pairs(RaidResBridge_Raids or {}) do
+        table.insert(rows, { id = id, name = raid.name or "?" })
+    end
+    table.sort(rows, byName)
+    return rows
+end
+
+local function raidName(id)
+    for _, r in ipairs(RB.EventRaids()) do
+        if r.id == id then return r.name end
+    end
+    return nil
+end
+
+-- The next two weeks, on this PC's clock.
+local function days()
+    local out, now = {}, time()
+    for i = 0, DAYS - 1 do
+        local t = now + i * 86400
+        local name = date("%a %d %b", t)
+        if i == 0 then name = "Today, " .. name elseif i == 1 then name = "Tomorrow, " .. name end
+        table.insert(out, { value = date("%Y-%m-%d", t), text = name })
+    end
+    return out
+end
+
+local function dayName(value)
+    for _, d in ipairs(days()) do
+        if d.value == value then return d.text end
+    end
+    return value
+end
+
+local function two(n) return string.format("%02d", n) end
+
+-- ---------------------------------------------------------------------------
+-- The menus
+-- ---------------------------------------------------------------------------
+
+local function form() return RB.eventForm end
+
+local function picked()
+    if CloseDropDownMenus then CloseDropDownMenus() end
+    RB.DrawNewEvent()
+end
+
+local function onPickRaid() form().raid = this.value; picked() end
+local function onPickDay() form().day = this.value; picked() end
+local function onPickHour() form().hour = this.value; picked() end
+local function onPickMinute() form().minute = this.value; picked() end
+local function onPickLimit() form().limit = this.value; picked() end
+
+local function add(text, value, func, checked)
+    local info = {}
+    info.text = text
+    if value == nil then
+        info.isTitle = 1
+    else
+        info.value = value
+        info.func = func
+        info.checked = checked and 1 or nil
+    end
+    UIDropDownMenu_AddButton(info)
+end
+
+function RB.InitEventRaidMenu()
+    local e = form()
+    if not e then return end
+    local rows = RB.EventRaids()
+    if table.getn(rows) == 0 then
+        add(RB.eventRaidsAsked and "Fetching raidres's raids..." or "No raids known yet")
+        return
+    end
+    for _, r in ipairs(rows) do
+        if r.title then add(r.title) else add(r.name, r.id, onPickRaid, r.id == e.raid) end
+    end
+end
+
+function RB.InitEventDayMenu()
+    local e = form()
+    if not e then return end
+    for _, d in ipairs(days()) do add(d.text, d.value, onPickDay, d.value == e.day) end
+end
+
+function RB.InitEventHourMenu()
+    local e = form()
+    if not e then return end
+    for h = 0, 23 do add(two(h), h, onPickHour, h == e.hour) end
+end
+
+function RB.InitEventMinuteMenu()
+    local e = form()
+    if not e then return end
+    for _, m in ipairs(MINUTES) do add(two(m), m, onPickMinute, m == e.minute) end
+end
+
+function RB.InitEventLimitMenu()
+    local e = form()
+    if not e then return end
+    for n = 1, MOST do add(tostring(n), n, onPickLimit, n == e.limit) end
+end
+
+-- ---------------------------------------------------------------------------
+-- Building it
+-- ---------------------------------------------------------------------------
+
+local function label(f, text, y)
+    local l = UI.text(f, "GameFontNormalSmall")
+    l:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, y)
+    l:SetText(text)
+    return l
+end
+
+local function dropdown(f, name, width, init, x, y)
+    local d = UI.part("drop", CreateFrame("Frame", name, f, "UIDropDownMenuTemplate"))
+    d:SetPoint("TOPLEFT", f, "TOPLEFT", x - 16, y + 8)
+    UIDropDownMenu_SetWidth(width, d)
+    UIDropDownMenu_Initialize(d, init)
+    if UIDropDownMenu_JustifyText then UIDropDownMenu_JustifyText("LEFT", d) end
+    return d
+end
+
+local function toggle(f, name, text, field, tipText, y)
+    local c = UI.checkbox(f, name, text)
+    c:SetPoint("TOPLEFT", f, "TOPLEFT", COL - 4, y + 4)
+    c.field = field
+    c:SetScript("OnClick", function()
+        form()[this.field] = this:GetChecked() and true or false
+    end)
+    c.tipText = tipText
+    c:SetScript("OnEnter", function()
+        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+        GameTooltip:SetText(this.label and this.label:GetText() or "", 1, 0.82, 0)
+        GameTooltip:AddLine(this.tipText, 1, 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    c:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    return c
+end
+
+local function build()
+    local f = CreateFrame("Frame", "ZyllaRaidResEventFrame", UIParent)
+    f:SetWidth(W)
+    f:SetHeight(H)
+    f:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+    -- above the window (HIGH), level with the popups that follow it
+    f:SetFrameStrata("DIALOG")
+    if f.SetToplevel then f:SetToplevel(true) end
+    if f.SetClampedToScreen then f:SetClampedToScreen(true) end
+    f:SetBackdrop(UI.DIALOG)
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:Hide()
+    table.insert(UISpecialFrames, "ZyllaRaidResEventFrame")
+
+    f.header = f:CreateTexture(nil, "ARTWORK")
+    f.header:SetTexture(HEADER)
+    f.header:SetWidth(300)
+    f.header:SetHeight(64)
+    f.header:SetPoint("TOP", f, "TOP", 0, 12)
+    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    f.title:SetPoint("TOP", f.header, "TOP", 0, -14)
+    f.title:SetText("New raidres event")
+
+    local bar = CreateFrame("Frame", nil, f)
+    bar:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -2)
+    bar:SetWidth(W - 60)
+    bar:SetHeight(28)
+    bar:EnableMouse(true)
+    bar:RegisterForDrag("LeftButton")
+    bar:SetScript("OnDragStart", function() this:GetParent():StartMoving() end)
+    bar:SetScript("OnDragStop", function() this:GetParent():StopMovingOrSizing() end)
+
+    f.close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    f.close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -5, -5)
+    f.close:SetScript("OnClick", function() this:GetParent():Hide() end)
+
+    label(f, "Raid", -42)
+    f.raid = dropdown(f, "ZyllaRaidResEventRaid", 200, RB.InitEventRaidMenu, COL, -42)
+    label(f, "Starts", -74)
+    f.day = dropdown(f, "ZyllaRaidResEventDay", 130, RB.InitEventDayMenu, COL, -74)
+    f.hour = dropdown(f, "ZyllaRaidResEventHour", 36, RB.InitEventHourMenu, COL + 150, -74)
+    f.minute = dropdown(f, "ZyllaRaidResEventMinute", 36, RB.InitEventMinuteMenu, COL + 206, -74)
+    f.clock = UI.text(f, "GameFontDisableSmall")
+    f.clock:SetPoint("TOPLEFT", f, "TOPLEFT", COL, -98)
+    f.clock:SetText("Your own clock, as raidres's site takes it.")
+    label(f, "Reserves each", -120)
+    f.limit = dropdown(f, "ZyllaRaidResEventLimit", 36, RB.InitEventLimitMenu, COL, -120)
+
+    f.lock = toggle(f, "ZyllaRaidResEventLock", "Lock at the start time", "lock",
+        "raidres locks the list itself when the raid starts, so nobody changes a reserve mid-raid.", -150)
+    f.comments = toggle(f, "ZyllaRaidResEventComments", "Allow comments", "comments",
+        "People can add a note to their reserve.", -174)
+    f.srplus = toggle(f, "ZyllaRaidResEventSrPlus", "Use SR+", "srplus",
+        "Reserving the same item event after event earns extra on the roll.", -198)
+    f.dupes = toggle(f, "ZyllaRaidResEventDupes", "Same item twice", "dupes",
+        "One person may reserve the same item more than once.", -222)
+
+    label(f, "Description", -252)
+    f.desc = UI.editBox(f, "ZyllaRaidResEventDesc", W - COL - EDGE - 4, "Optional")
+    f.desc:SetPoint("TOPLEFT", f, "TOPLEFT", COL + 4, -248)
+    f.desc:SetMaxLetters(200)
+    f.desc:SetScript("OnEnterPressed", function() this:ClearFocus() end)
+
+    f.status = UI.text(f, "GameFontHighlightSmall")
+    f.status:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, -280)
+    f.status:SetWidth(W - EDGE * 2 - 8)
+    f.status:SetHeight(24)
+
+    f.create = UI.button(f, "Create event", 110)
+    f.create:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -EDGE + 2, 18)
+    f.create:SetScript("OnClick", function() RB.CreateEvent() end)
+    f.cancel = UI.button(f, "Cancel", 80)
+    f.cancel:SetPoint("RIGHT", f.create, "LEFT", -4, 0)
+    f.cancel:SetScript("OnClick", function() this:GetParent():Hide() end)
+
+    f:SetScript("OnShow", function() if PlaySound then PlaySound("igMainMenuOpen") end end)
+    f:SetScript("OnHide", function()
+        if PlaySound then PlaySound("igMainMenuClose") end
+        if CloseDropDownMenus then CloseDropDownMenus() end
+    end)
+    return f
+end
+
+-- ---------------------------------------------------------------------------
+-- Using it
+-- ---------------------------------------------------------------------------
+
+local function note(text, colour)
+    local f = RB.eventFrame
+    if f then f.status:SetText(colour and UI.hex(colour, text) or text) end
+end
+
+function RB.DrawNewEvent()
+    local f, e = RB.eventFrame, RB.eventForm
+    if not f or not e then return end
+    UIDropDownMenu_SetText((e.raid and raidName(e.raid)) or "Pick a raid", f.raid)
+    UIDropDownMenu_SetText(dayName(e.day), f.day)
+    UIDropDownMenu_SetText(two(e.hour), f.hour)
+    UIDropDownMenu_SetText(two(e.minute), f.minute)
+    UIDropDownMenu_SetText(tostring(e.limit), f.limit)
+    f.lock:SetChecked(e.lock)
+    f.comments:SetChecked(e.comments)
+    f.srplus:SetChecked(e.srplus)
+    f.dupes:SetChecked(e.dupes)
+    if RB.createPending or not e.raid then f.create:Disable() else f.create:Enable() end
+end
+
+--[[ Open it, with last time's choices, or raidres's own defaults the
+     first time: comments on, everything else off, one reserve each. The
+     raid starts as the window's: the one you're in, or the list's. ]]
+function RB.OpenNewEvent()
+    if not (RB.LockControlReady and RB.LockControlReady()) then
+        say("making events from in game needs RaidResLock.dll (the lock helper) running.")
+        return
+    end
+    UI = RB.UI
+    local f = RB.eventFrame
+    if not f then
+        f = RB.BuildDialog(build)
+        RB.eventFrame = f
+    end
+    local last = remembered()
+    local today = date("%Y-%m-%d")
+    RB.eventForm = {
+        raid = last.raid or RB.raid,
+        day = (last.day and last.day >= today) and last.day or today,
+        hour = last.hour or 20,
+        minute = last.minute or 0,
+        limit = last.limit or 1,
+        lock = last.lock or false,
+        comments = (last.comments == nil) and true or last.comments,
+        srplus = last.srplus or false,
+        dupes = last.dupes or false,
+    }
+    f.desc:SetText(last.description or "")
+    note("")
+    -- raidres's own raid list, grouped; quietly, once a session
+    if RB.Http and RB.Http() and not RB.raidList and not RB.eventRaidsAsked then
+        RB.eventRaidsAsked = true
+        RB.HttpRaidList(function(list)
+            RB.eventRaidsAsked = nil
+            if list and table.getn(list) > 0 then RB.raidList = list end
+            RB.DrawNewEvent()
+        end)
+    end
+    RB.DrawNewEvent()
+    f:Show()
+end
+
+function RB.CreateEvent()
+    local f, e = RB.eventFrame, RB.eventForm
+    if not f or not e then return end
+    if not e.raid then
+        note("Pick a raid first.", UI.RED)
+        return
+    end
+    local clock = two(e.hour) .. ":" .. two(e.minute)
+    if e.day .. " " .. clock < date("%Y-%m-%d %H:%M") then
+        note("That time has already passed.", UI.RED)
+        return
+    end
+    if RB.sessionExpired then
+        note("Your raidres session expired: click Sign in in the main window first.", UI.RED)
+        return
+    end
+    if RB.HelperBusy() then
+        note("The lock helper is busy; try again in a moment.", UI.RED)
+        return
+    end
+    local desc = f.desc:GetText() or ""
+    local sent = RB.SendCreateCommand({
+        raid = e.raid, day = e.day, clock = clock, limit = e.limit, lock = e.lock,
+        comments = e.comments, srplus = e.srplus, dupes = e.dupes, description = desc,
+        name = raidName(e.raid),
+    })
+    if not sent then
+        note("Can't reach the lock script. Is Nampower loaded?", UI.RED)
+        return
+    end
+    local last = remembered()
+    last.raid, last.day, last.hour, last.minute = e.raid, e.day, e.hour, e.minute
+    last.limit, last.lock, last.comments = e.limit, e.lock, e.comments
+    last.srplus, last.dupes, last.description = e.srplus, e.dupes, desc
+    note("Creating it on raidres...", UI.GOLD)
+    RB.DrawNewEvent()
+end
+
+--[[ Made: into the window, fetched, and offered to the raid -- or the
+     party -- as one line. Chat.lua turns it into a link for anyone else
+     running this. ]]
+function RB.OfferToPost(ref, name)
+    local link = "https://raidres.top/res/" .. ref
+    local raid = (GetNumRaidMembers and GetNumRaidMembers() or 0) > 0
+    local party = (GetNumPartyMembers and GetNumPartyMembers() or 0) > 0
+    local channel = (raid and "RAID") or (party and "PARTY") or nil
+    if not channel or not StaticPopupDialogs then
+        say("event created: |cffffffff" .. link .. "|r")
+        return
+    end
+    RB.postLine = { text = "Soft reserves are open: " .. link .. (name and (" (" .. name .. ")") or ""),
+                    channel = channel }
+    if not StaticPopupDialogs.ZYLLARAIDRES_POST then
+        StaticPopupDialogs.ZYLLARAIDRES_POST = {
+            text = "Event created:\n%s\n\nPost the link in %s chat?",
+            button1 = "Post",
+            button2 = "Not now",
+            OnAccept = function()
+                local p = RB.postLine
+                RB.postLine = nil
+                if p then SendChatMessage(p.text, p.channel) end
+            end,
+            OnCancel = function() RB.postLine = nil end,
+            timeout = 0, whileDead = 1, hideOnEscape = 1,
+        }
+    end
+    StaticPopup_Show("ZYLLARAIDRES_POST", link, string.lower(channel))
+end
+
+function RB.OnCreateResult(pending, text)
+    local f = RB.eventFrame
+    local _, _, ref = string.find(text, "^ok created (%w+)$")
+    if ref then
+        if f then f:Hide() end
+        local g = RB.BuildGui()
+        if not g:IsVisible() then RB.ToggleGui() end
+        g.link:SetText("https://raidres.top/res/" .. ref)
+        RB.Request(ref)
+        RB.OfferToPost(ref, pending.event and pending.event.name)
+        return
+    end
+    local msg
+    if string.sub(text, 1, 6) == "signin" then
+        RB.sessionExpired = true
+        msg = "Your raidres session expired. Click Sign in in the main window, then try again."
+    else
+        msg = (string.gsub(text, "^error: ", "raidres: "))
+    end
+    if f and f:IsVisible() then
+        note(msg, UI.RED)
+        RB.DrawNewEvent()
+    else
+        say(msg)
+    end
+end

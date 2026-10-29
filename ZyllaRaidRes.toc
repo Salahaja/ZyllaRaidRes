@@ -5,7 +5,7 @@
 ## Version: 1.5.0
 ## X-Website: https://github.com/Salahaja/ZyllaRaidRes
 ## OptionalDeps: RollFor, pfUI
-## SavedVariables: RaidResBridge_Manual, RaidResBridge_Limit, RaidResBridge_Names, RaidResBridge_LockControl, RaidResBridge_Options, RaidResBridge_Recent, RaidResBridge_Spec
+## SavedVariables: RaidResBridge_Manual, RaidResBridge_Limit, RaidResBridge_Names, RaidResBridge_LockControl, RaidResBridge_Options, RaidResBridge_Recent, RaidResBridge_Spec, RaidResBridge_NewEvent
 ## SavedVariablesPerCharacter: RaidResBridge_Sent
 
 RaidResBridge.lua
@@ -15,6 +15,8 @@ Names.lua
 # After the core: both use RB.Read and the slash handler.
 Manual.lua
 Gui.lua
+# The New event dialog: the window's parts and look.
+Event.lua
 # Uses the window's snapshot and look.
 Minimap.lua
 # Makes raidres links in raid chat clickable; uses the window.

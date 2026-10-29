@@ -377,6 +377,25 @@ local function decoded(status, body, what)
     return v
 end
 
+--[[ Every raid raidres offers for this game, with its kind -- RAID40,
+     RAID20, RAID10 or WORLDBOSS -- which is how its own "Create event" form
+     groups them. A small public file, fetched quietly for the New event
+     window. done(list) or done(nil, why). ]]
+function RB.HttpRaidList(done)
+    RB.Get("/raids/raids.json", function(status, body)
+        local list, why = decoded(status, body, "the raid list")
+        if not list then done(nil, why) return end
+        local out = {}
+        for _, r in ipairs(list) do
+            if type(r) == "table" and r.game == "TURTLE" and type(r.id) == "number" then
+                table.insert(out, { id = r.id, name = r.name or "?", kind = r.raidType,
+                                    size = r.maxAttendance })
+            end
+        end
+        done(out)
+    end, true)
+end
+
 --[[ Is a fetch the leader asked for under way? A quiet look at the lock
      doesn't count: it must not say "Fetching..." or turn a /rrb away. ]]
 function RB.HttpBusy()
@@ -540,15 +559,16 @@ lockTick:SetScript("OnUpdate", function()
     this.t = (this.t or 0) + arg1
     if this.t < LOCK_POLL then return end
     this.t = 0
-    if not RB.lockPending and not RB.reservePending then this:Hide() return end
+    if not RB.HelperBusy() then this:Hide() return end
     RB.CheckLockResult()
     RB.CheckReserveResult()
+    RB.CheckCreateResult()
 end)
 
 -- One command file, so one command at a time: a lock and a reserve sent
 -- together would have the second overwrite the first.
 function RB.HelperBusy()
-    return (RB.lockPending or RB.reservePending) and true or false
+    return (RB.lockPending or RB.reservePending or RB.createPending) and true or false
 end
 
 function RB.SendLockCommand(ref, lock)
@@ -624,6 +644,48 @@ function RB.CheckReserveResult()
     pcall(WriteCustomFile, LOCK_RESULT, "", "w")
     RB.reservePending = nil
     if RB.OnReserveResult then RB.OnReserveResult(pending, text) end
+end
+
+-- ---------------------------------------------------------------------------
+-- A new event, through the same helper
+--
+--   create RAIDID YYYY-MM-DD HH:MM LIMIT LOCK COMMENTS SRPLUS DUPES [DESCRIPTION]
+--   -> ok created REF | signin [expiry] | error: why
+--
+-- The date and time are this PC's clock, as the game shows it; the helper
+-- turns them into the UTC raidres keeps. The switches go as 0 or 1.
+-- ---------------------------------------------------------------------------
+
+local CREATE_TIMEOUT = 45
+
+function RB.SendCreateCommand(e)
+    if not RB.LockControlReady() or RB.HelperBusy() then return false end
+    local function bit(v) return v and "1" or "0" end
+    local desc = string.gsub(e.description or "", "%s+", " ")
+    local cmd = "create " .. e.raid .. " " .. e.day .. " " .. e.clock .. " " .. e.limit ..
+        " " .. bit(e.lock) .. " " .. bit(e.comments) .. " " .. bit(e.srplus) ..
+        " " .. bit(e.dupes) .. ((desc ~= "" and desc ~= " ") and (" " .. desc) or "")
+    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
+    if not pcall(WriteCustomFile, LOCK_CMD, cmd, "w") then return false end
+    RB.createPending = { event = e, sent = GetTime() }
+    lockTick:Show()
+    return true
+end
+
+function RB.CheckCreateResult()
+    local pending = RB.createPending
+    if not pending then return end
+    local text
+    if GetTime() - pending.sent > CREATE_TIMEOUT then
+        text = "error: the lock script did not answer. Is it running?"
+    else
+        local ok, got = pcall(ReadCustomFile, LOCK_RESULT)
+        if not ok or type(got) ~= "string" or got == "" then return end
+        pcall(WriteCustomFile, LOCK_RESULT, "", "w")
+        text = got
+    end
+    RB.createPending = nil
+    if RB.OnCreateResult then RB.OnCreateResult(pending, text) end
 end
 
 function RB.CheckLockResult()

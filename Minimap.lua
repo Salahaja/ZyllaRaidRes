@@ -135,6 +135,8 @@ local function onPick()
         RB.Apply()
     elseif v == "view" then
         RB.ViewInRollFor()
+    elseif v == "new" then
+        RB.OpenNewEvent()
     elseif v == "hide" then
         RB.ShowMinimapButton(false)
     elseif v == "auto" or v == "blizzard" or v == "pfui" then
@@ -163,6 +165,9 @@ function RB.InitMinimapMenu()
     add((RB.gui and RB.gui:IsVisible()) and "Close the window" or "Open the window", "window")
     add("Send to RollFor", "send", false, not RB.RollForReady())
     add("View in RollFor", "view", false, not (rf and type(rf.softres_toggle) == "function"))
+    if RB.OpenNewEvent then
+        add("New raidres event...", "new", false, not (RB.LockControlReady and RB.LockControlReady()))
+    end
     add("Look")
     local want = (RaidResBridge_Options and RaidResBridge_Options.skin) or "auto"
     add("Automatic", "auto", want == "auto")
