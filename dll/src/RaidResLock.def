@@ -1,0 +1,3 @@
+LIBRARY RaidResLock
+EXPORTS
+    Load

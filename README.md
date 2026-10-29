@@ -23,14 +23,20 @@ adds them by hand for anyone who couldn't sign up.
    so the folder is `Interface/AddOns/ZyllaRaidRes` (with `ZyllaRaidRes.toc`
    inside). The source zip from GitHub unpacks as `ZyllaRaidRes-main`, so
    rename it. The [release](../../releases/latest) zip is already named right.
-2. **The DLL**, so the game can fetch by itself. Download `RaidResHttp.dll`
+2. **RaidResHttp.dll** — so the game can fetch lists by itself. Download it
    from the [latest release](../../releases/latest), put it next to `WoW.exe`,
    and add a line `RaidResHttp.dll` to `dlls.txt`. VanillaFixes asks once
    whether to load it.
+3. **RaidResLock.dll** *(optional)* — lock and unlock raidres events from in
+   game. Download it from the same release, put it next to `WoW.exe`, and add
+   `RaidResLock.dll` to `dlls.txt`. Requires
+   **[Python 3](https://www.python.org/downloads/)** (with "Add to PATH"
+   ticked) and **[Google Chrome](https://www.google.com/chrome/)** installed.
+   See [Locking and unlocking from in game](#locking-and-unlocking-from-in-game).
 
 Type `/rrb help` to see which way it's fetching.
 
-Without the DLL it still works, but needs a small script running outside the
+Without the DLLs it still works, but needs a small script running outside the
 game (see [the watcher](#without-the-dll-the-watcher)).
 
 ## Why a DLL
@@ -308,13 +314,43 @@ With `RaidResHttp.dll` the lock button shows the state. Without it, the
 state is whatever the last fetch saw. Either way, **locking and unlocking
 on raidres normally means opening the site.**
 
-If you'd rather do it from in game, a small helper script can do it through
-Chrome:
+If you'd rather do it from in game, `RaidResLock.dll` does it through
+Chrome automatically:
 
-1. **Python 3** and **Chrome** (or Chromium) on the same machine.
-2. Start Chrome once with `tools\start_chrome_cdp.bat`, or add
-   `--remote-debugging-port=9222` to your Chrome shortcut. Sign into
-   raidres in that Chrome.
+### With the DLL (recommended)
+
+1. **[Python 3](https://www.python.org/downloads/)** installed and on
+   your PATH. The installer's "Add python.exe to PATH" checkbox does this.
+2. **[Google Chrome](https://www.google.com/chrome/)** installed in the
+   default location.
+3. **Sign into raidres once.** Run `tools\start_chrome_cdp.bat` — it
+   opens a Chrome window with its own profile. Sign into
+   [raidres.top](https://raidres.top) there, then close it.
+4. **Place `RaidResLock.dll`** next to `WoW.exe` and add a line
+   `RaidResLock.dll` to `dlls.txt`.
+
+That's it. When the game starts, the DLL launches the watcher in the
+background and the addon detects it — no `/rrb lockcontrol on` needed.
+Chrome runs headless (no visible window) for lock/unlock. When the game
+exits, the DLL kills the watcher and headless Chrome.
+
+**Session expiry.** The lock button tooltip shows when your raidres
+session expires. If the session has expired, the button turns into
+**Sign in** and opens Chrome to the login page so you can re-authenticate.
+After signing in, close Chrome and the next lock/unlock goes headless
+again.
+
+**`/rrb restart`** kills and restarts the helper's Chrome if it gets
+stuck.
+
+Users who don't want lock control simply leave `RaidResLock.dll` out of
+`dlls.txt`. The lock button stays read-only with no errors.
+
+### Without the DLL (manual)
+
+1. **Python 3** and **Chrome** on the same machine.
+2. Start Chrome once with `tools\start_chrome_cdp.bat` and sign into
+   raidres.
 3. Run the lock watcher: `python tools/raidres_lock.py watch`.
 4. In game: `/rrb lockcontrol on`.
 
@@ -336,7 +372,8 @@ before, with no errors.
 | `/rrb` | open or close the window |
 | `/rrb <link>` | fetch that list and import it |
 | `/rrb load` | import what was fetched, plus anything typed |
-| `/rrb lockcontrol` | toggle in-game lock/unlock (needs the helper script) |
+| `/rrb lockcontrol` | toggle in-game lock/unlock (manual mode, without RaidResLock.dll) |
+| `/rrb restart` | restart the helper script's Chrome (if it gets stuck) |
 | `/rrb help` | the commands, and how it's fetching |
 | `/rrb debug` | what RaidResHttp.dll is doing right now: requests talking, queued, and the oldest one's age |
 
@@ -379,3 +416,5 @@ lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.l
   keeps the list across a `/reload`.
 - **RollFor** to import into — optional for fetching, required for loading.
 - **Python 3** and `curl` for the watcher, if you use it.
+- **RaidResLock.dll** *(optional)* for in-game lock/unlock. Needs **Python 3**
+  on PATH and **Google Chrome** installed.
