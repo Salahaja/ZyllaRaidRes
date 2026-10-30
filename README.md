@@ -550,6 +550,13 @@ they are. Hard reserves are sent only if you changed them, so ones set on the
 site with class limits or notes aren't flattened. raidres refuses anything it
 won't take, such as carrying SR+ from a list without SR+, in its own words.
 
+**One player's SR+**: on a raidres list with SR+ on, right-click one of a
+player's raidres reserves in the Reserves box. **Set SR+...** changes its
+number; **Mark validated** and **Mark not validated** do what raidres's SR+
+editor's checkbox does. It makes the same request that editor makes, so only
+the list's owner and its admins can; raidres says so if you can't. The list
+is fetched again afterwards.
+
 From a terminal, `tools/raidres_lock.py create` does the same, and `--dry-run`
 shows what it would send:
 
@@ -583,8 +590,8 @@ failure.
 ```bash
 lua tools/test_bridge.lua   # lists, the merge, typed reserves, names   (139)
 lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (134)
-lua tools/test_gui.lua      # the window, minimap, RollFor box, events  (509)
-python tools/test_lock.py   # reserving and events, in a throwaway Chrome (79)
+lua tools/test_gui.lua      # the window, minimap, RollFor box, events  (524)
+python tools/test_lock.py   # reserving and events, in a throwaway Chrome (89)
 lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Event.lua Minimap.lua Chat.lua
 ```
 

@@ -463,6 +463,14 @@ local function decoded(status, body, what)
     return v
 end
 
+--[[ Is SR+ on for a list? Read off the event replies the window already
+     gets -- the fetch, and the half-minute look at the lock -- so knowing
+     costs no request of its own. ]]
+RB.eventSr = RB.eventSr or {}
+function RB.NoteEventSr(ref, event)
+    if type(event) == "table" and ref then RB.eventSr[ref] = event.allowSrPlus == true end
+end
+
 --[[ An event's SR+ settings as raidres has them now, for the Event settings
      window to start from. done({srplus, inc, prev}) or done(nil, why). ]]
 function RB.HttpEventSettings(ref, done)
@@ -522,6 +530,7 @@ function RB.HttpPollLock(ref)
             return
         end
         RB.pollFailed = 0
+        RB.NoteEventSr(ref, event)
         if RB.activeRef and string.lower(RB.activeRef) ~= string.lower(ref) then return end
         RB.SetLock(ref, event.locked)
         -- The window draws from its last snapshot: bring its lock up to date.
@@ -566,6 +575,7 @@ function RB.HttpRequest(ref)
     RB.Get("/api/events/" .. ref, function(status, body)
         local event, why = decoded(status, body, "list " .. ref)
         if not event then say("|cffff5179" .. why .. "|r") return end
+        RB.NoteEventSr(ref, event)
         if type(event.raidId) ~= "number" then
             say("|cffff5179that list does not say which raid it is for|r.")
             return
@@ -804,6 +814,20 @@ function RB.SendSettingsCommand(ref, e)
     return true
 end
 
+--[[ One reserve's SR+: srplus REF ITEMID NAME [value=N] [valid=0|1] -> ok srplus.
+     Shares the create slot: one change to raidres at a time. ]]
+function RB.SendSrPlusCommand(ref, itemId, name, value, valid)
+    if not RB.LockControlReady() or RB.HelperBusy() then return false end
+    local cmd = "srplus " .. ref .. " " .. itemId .. " " .. name
+    if value ~= nil then cmd = cmd .. " value=" .. value end
+    if valid ~= nil then cmd = cmd .. " valid=" .. (valid and "1" or "0") end
+    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
+    if not pcall(WriteCustomFile, LOCK_CMD, cmd, "w") then return false end
+    RB.createPending = { srplus = ref, sent = GetTime() }
+    lockTick:Show()
+    return true
+end
+
 --[[ Your saved HR lists on raidres, for the New event window: the helper
      answers "ok templates [{id, name, raid, hr}, ...]". Shares the create
      slot, so a list fetch and a create never cross. ]]
@@ -839,6 +863,8 @@ function RB.CheckCreateResult()
     RB.createPending = nil
     if pending.templates then
         if RB.OnTemplatesResult then RB.OnTemplatesResult(text) end
+    elseif pending.srplus then
+        if RB.OnSrPlusResult then RB.OnSrPlusResult(pending, text) end
     elseif RB.OnCreateResult then
         RB.OnCreateResult(pending, text)
     end

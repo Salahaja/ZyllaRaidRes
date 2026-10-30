@@ -1201,6 +1201,10 @@ local function buildPlayers(f)
     f.specMenu = CreateFrame("Frame", "ZyllaRaidResSpecMenu", f, "UIDropDownMenuTemplate")
     f.specMenu:Hide()
     UIDropDownMenu_Initialize(f.specMenu, RB.InitSpecMenu, "MENU")
+    -- one reserve's SR+, for the list's owner and officers
+    f.srMenu = CreateFrame("Frame", "ZyllaRaidResSrPlusMenu", f, "UIDropDownMenuTemplate")
+    f.srMenu:Hide()
+    UIDropDownMenu_Initialize(f.srMenu, RB.InitSrPlusMenu, "MENU")
 
     f.dRows = {}
     for i = 1, D_ROWS do
@@ -1234,10 +1238,21 @@ local function buildPlayers(f)
         row.mine:SetWidth(44)
         row.mine:SetHeight(ROW_H)
         row.mine:SetText("raidres")
+        row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
         row:SetScript("OnClick", function()
-            if this.itemId and IsShiftKeyDown and IsShiftKeyDown() then linkInChat(this.itemId) end
+            if arg1 == "RightButton" then
+                if this.itemId and this.web then RB.OpenSrPlusMenu(this.itemId) end
+            elseif this.itemId and IsShiftKeyDown and IsShiftKeyDown() then
+                linkInChat(this.itemId)
+            end
         end)
-        row:SetScript("OnEnter", function() RB.ItemTooltip(this, this.itemId) end)
+        row:SetScript("OnEnter", function()
+            RB.ItemTooltip(this, this.itemId)
+            if this.itemId and this.web and RB.CanEditSrPlus() then
+                GameTooltip:AddLine("Right-click: change its SR+", 0.5, 0.5, 0.5)
+                GameTooltip:Show()
+            end
+        end)
         row:SetScript("OnLeave", function() GameTooltip:Hide() end)
         f.dRows[i] = row
     end
@@ -2458,6 +2473,7 @@ local function drawDetail(f, s, sel)
         local plus = tonumber(it.sr_plus) or 0
         row.text:SetText(hex(qualityHex(q), name) .. (plus > 0 and hex(GOLD, "  +" .. plus) or ""))
         row.onRaidres = (web[it.id] and onRaidres) and true or nil
+        row.web, row.srPlus = web[it.id] and true or nil, plus
         if row.onRaidres then
             row.tag:Hide()
             row.mine:Show()
@@ -2638,6 +2654,114 @@ function RB.Refresh()
     if not f or not f:IsVisible() then return end
     f.snap = RB.Snapshot()
     RB.Draw()
+end
+
+-- ---------------------------------------------------------------------------
+-- One reserve's SR+, from the Reserves box
+--
+-- raidres's SR+ editor, one row at a time: right-click a reserve made on
+-- raidres to set its SR+ or mark it validated. Offered on a raidres list with
+-- SR+ on, with the lock helper running; whether you may -- the list's owner
+-- or one of its admins -- is raidres's to say, and it says so if not.
+-- ---------------------------------------------------------------------------
+
+-- RB.eventSr (Http.lua): reference -> is SR+ on, as raidres last said.
+
+function RB.CanEditSrPlus()
+    local s = RB.gui and RB.gui.snap
+    return s and s.ref and s.ref ~= "manual" and RB.eventSr and RB.eventSr[s.ref]
+        and RB.LockControlReady and RB.LockControlReady() and true or false
+end
+
+function RB.OpenSrPlusMenu(id)
+    if not RB.CanEditSrPlus() or not RB.player then return end
+    local s = RB.gui.snap
+    local m = s.matchedBy[key(RB.player)]
+    local now = 0
+    for _, it in ipairs(s.items[key(RB.player)] or {}) do
+        if it.id == id then now = tonumber(it.sr_plus) or 0 end
+    end
+    RB.srTarget = { ref = s.ref, item = id, name = (m and m.signup) or RB.player, now = now }
+    ToggleDropDownMenu(1, nil, RB.gui.srMenu, "cursor")
+end
+
+local function onPickSrPlus()
+    if CloseDropDownMenus then CloseDropDownMenus() end
+    local t = RB.srTarget
+    if not t then return end
+    if this.value == "set" then
+        if not StaticPopupDialogs.ZYLLARAIDRES_SRPLUS then
+            StaticPopupDialogs.ZYLLARAIDRES_SRPLUS = {
+                text = "SR+ for %s's %s:",
+                button1 = "Set",
+                button2 = "Cancel",
+                hasEditBox = 1,
+                maxLetters = 6,
+                OnAccept = function()
+                    local box = getglobal(this:GetParent():GetName() .. "EditBox")
+                    RB.SendSrPlus(tonumber(box and box:GetText() or ""), nil)
+                end,
+                EditBoxOnEnterPressed = function()
+                    RB.SendSrPlus(tonumber(this:GetText() or ""), nil)
+                    this:GetParent():Hide()
+                end,
+                timeout = 0, whileDead = 1, hideOnEscape = 1,
+            }
+        end
+        StaticPopup_Show("ZYLLARAIDRES_SRPLUS", t.name, (RB.ItemInfo(t.item)))
+    else
+        RB.SendSrPlus(nil, this.value == "valid")
+    end
+end
+
+function RB.InitSrPlusMenu()
+    local t = RB.srTarget
+    if not t then return end
+    local info = {}
+    info.text = t.name .. "'s " .. RB.ItemInfo(t.item)
+    info.isTitle = 1
+    UIDropDownMenu_AddButton(info)
+    local rows = { { "Set SR+... (now +" .. t.now .. ")", "set" },
+                   { "Mark validated", "valid" }, { "Mark not validated", "invalid" } }
+    for i = 1, table.getn(rows) do
+        info = {}
+        info.text = rows[i][1]
+        info.value = rows[i][2]
+        info.func = onPickSrPlus
+        UIDropDownMenu_AddButton(info)
+    end
+end
+
+--- A new value, a validation, or both, to raidres through the helper.
+function RB.SendSrPlus(value, valid)
+    local t = RB.srTarget
+    if not t then return end
+    if value ~= nil and (value < 0 or value > 100000 or math.floor(value) ~= value) then
+        RB.Notice("SR+ is a whole number, 0 or more.")
+        return
+    end
+    if RB.HelperBusy() then
+        RB.Notice("still waiting on raidres for the last one.")
+        return
+    end
+    if not RB.SendSrPlusCommand(t.ref, t.item, t.name, value, valid) then
+        RB.Notice("can't reach the lock script. Is Nampower loaded?")
+        return
+    end
+    RB.Notice("changing " .. t.name .. "'s SR+ on raidres...")
+end
+
+function RB.OnSrPlusResult(pending, text)
+    if text == "ok srplus" then
+        RB.Notice("SR+ saved on raidres. Fetching the list again...")
+        RB.Request(pending.srplus)
+    elseif string.sub(text, 1, 6) == "signin" then
+        RB.sessionExpired = true
+        RB.Notice("raidres session expired. Click Sign in.")
+    else
+        RB.Notice((string.gsub(text, "^error: ", "raidres: ")))
+    end
+    RB.DrawStatus()
 end
 
 function RB.ToggleGui()

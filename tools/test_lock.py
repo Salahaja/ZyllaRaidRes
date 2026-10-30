@@ -97,6 +97,8 @@ check("a short command is refused before Chrome", w.create_event(["95", "2026-11
 check("a bad setting is refused before Chrome", w.event_settings(["DEMO42", "srplus=maybe"]),
       "error: srplus must be 0 or 1")
 check("so is an unknown one", w.event_settings(["DEMO42", "admins=all"]), "error: bad setting: 'admins=all'")
+check("an SR+ change must say what", w.set_srplus(["DEMO42", "1", "Aldwyn", "value=x"]),
+      "error: bad SR+ change: 'value=x'")
 opts, desc = w.split_options(["hr=19137,17076", "inc=10", "prev=WW8CK7", "MC", "inc=5", "night"])
 check("options come before the description", (opts, desc),
       ({"hr": "19137,17076", "inc": "10", "prev": "WW8CK7"}, "MC inc=5 night"))
@@ -149,7 +151,7 @@ def run(args, me="1000", event=None, chars=None, reply=None, script=None, tpls=N
         opts = opts || {};
         let r;
         if (url === '/api/auth/me') r = site.me;
-        else if (url.startsWith('/api/events/') && opts.method === 'PATCH') {
+        else if (url.startsWith('/api/events/') && (opts.method === 'PATCH' || opts.method === 'PUT')) {
           window.__sent.push({ url, method: opts.method, body: JSON.parse(opts.body) });
           r = site.reply;
         }
@@ -341,6 +343,38 @@ try:
                        event=copy.deepcopy(OPEN) | {"isAuthor": False})
     check("someone else's list is refused before sending", (answer.get("message"), sent),
           ("that list isn't yours to change", []))
+
+    print("one reserve's SR+")
+    sr = copy.deepcopy(OPEN) | {"allowSrPlus": True}
+    for r in sr["reservations"]:
+        r["srPlus"] = None
+    sr["reservations"][0]["srPlus"] = {"id": 1, "value": 20, "isValid": True}
+    target = next(r for r in sr["reservations"] if r["character"]["name"] == "Aldwyn")
+    tg = GAME_ID[target["raidItemId"]]
+    answer, sent = run({"ref": "DEMO42", "item": tg, "name": "aldwyn", "value": 35},
+                       script=w._SRPLUS_JS, event=sr, reply={"status": 200, "body": {}})
+    check("set", answer, {"result": "ok", "done": "srplus"})
+    body = sent[0]["body"]
+    check("one PUT to the list's SR+, as raidres's editor sends it",
+          (sent[0]["method"], sent[0]["url"], body["reference"]), ("PUT", "/api/events/DEMO42/sr-plus", "DEMO42"))
+    check("every reservation goes, as the editor sends them all", len(body["reservations"]), len(sr["reservations"]))
+    got = {x["reservationId"]: (x["value"], x["isValid"]) for x in body["reservations"]}
+    check("that one changed", got[target["id"]][0], 35)
+    check("the others kept as they were", got[sr["reservations"][0]["id"]],
+          (35, True) if sr["reservations"][0]["id"] == target["id"] else (20, True))
+    answer, sent = run({"ref": "DEMO42", "item": tg, "name": "Aldwyn", "valid": True},
+                       script=w._SRPLUS_JS, event=sr, reply={"status": 200, "body": {}})
+    got = {x["reservationId"]: (x["value"], x["isValid"]) for x in sent[0]["body"]["reservations"]}
+    check("validating keeps its value", got[target["id"]][1], True)
+    answer, sent = run({"ref": "DEMO42", "item": tg, "name": "Aldwyn", "value": 5},
+                       script=w._SRPLUS_JS, event=copy.deepcopy(OPEN) | {"allowSrPlus": False})
+    check("a list without SR+ is refused", (answer.get("message"), sent), ("SR+ isn't on for that list", []))
+    answer, sent = run({"ref": "DEMO42", "item": tg, "name": "Nobody", "value": 5},
+                       script=w._SRPLUS_JS, event=sr)
+    check("someone who didn't reserve it is refused", answer.get("message"), "Nobody hasn't reserved that on raidres")
+    answer, sent = run({"ref": "DEMO42", "item": tg, "name": "Aldwyn", "value": 5},
+                       script=w._SRPLUS_JS, event=sr, reply={"status": 403, "body": {"message": "Forbidden"}})
+    check("raidres's no to a non-officer, in its words", answer.get("message"), "Forbidden")
 finally:
     ws.close()
     w.kill_chrome()

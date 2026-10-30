@@ -900,6 +900,75 @@ def event_settings(words, dry=False):
         return "ok saved"
     return reserve_line(answer)
 
+# ---------------------------------------------------------------------------
+# One reserve's SR+, set or validated
+#
+# PUT /api/events/<ref>/sr-plus, as raidres's own SR+ editor sends it: every
+# reservation with its current value and validation, the one being changed
+# changed. Only the list's owner and its admins may; raidres says so if not.
+# ---------------------------------------------------------------------------
+
+_SRPLUS_JS = r"""
+async (a) => {
+""" + _PAGE_HELPERS + r"""
+  if (await signedIn() == null) return answer({ result: 'signin' });
+  const ev = await get('/api/events/' + encodeURIComponent(a.ref));
+  if (!ev.ok || !ev.body) return answer({ result: 'error', message: 'raidres has no list ' + a.ref });
+  const e = ev.body;
+  if (!e.allowSrPlus) return answer({ result: 'error', message: "SR+ isn't on for that list" });
+  const raid = await get('/raids/raid_' + e.raidId + '.json');
+  if (!raid.ok || !raid.body) return answer({ result: 'error', message: "couldn't load the raid's loot table" });
+  const ids = (raid.body.raidItems || []).filter(i => i.gameDbItemId === a.item).map(i => i.id);
+  const name = a.name.toLocaleLowerCase();
+  const row = (e.reservations || []).find(r => r.character
+    && String(r.character.name).toLocaleLowerCase() === name && ids.includes(r.raidItemId));
+  if (!row) return answer({ result: 'error', message: a.name + " hasn't reserved that on raidres" });
+  const list = (e.reservations || []).map(r => ({ reservationId: r.id,
+    isValid: !!(r.srPlus && r.srPlus.isValid),
+    value: (r.srPlus && Number(r.srPlus.value) > 0) ? Number(r.srPlus.value) : 0 }));
+  const mine = list.find(x => x.reservationId === row.id);
+  if (a.value != null) mine.value = a.value;
+  if (a.valid != null) mine.isValid = a.valid;
+  const body = { reference: e.reference, reservations: list };
+  if (a.dry) return answer({ result: 'plan', method: 'PUT', body });
+  const r = await send('/api/events/' + encodeURIComponent(e.reference) + '/sr-plus', 'PUT', body);
+  if (r.fail) return r.fail;
+  return answer({ result: 'ok', done: 'srplus' });
+}
+"""
+
+def set_srplus(words, dry=False):
+    """srplus REF ITEMID NAME [value=N] [valid=0|1]"""
+    if len(words) < 4:
+        return "error: bad command"
+    try:
+        ref = validate_ref(words[0])
+        item = int(words[1])
+        name = words[2]
+        if not _NAME_RE.match(name):
+            raise ValueError("bad character name: %r" % name)
+        args = {"ref": ref, "item": item, "name": name, "dry": bool(dry)}
+        for w in words[3:]:
+            m = re.match(r"^(value|valid)=(\d+)$", w)
+            if not m:
+                raise ValueError("bad SR+ change: %r" % w)
+            if m.group(1) == "value":
+                args["value"] = int(m.group(2))
+                if args["value"] > 100000:
+                    raise ValueError("SR+ too large")
+            else:
+                if m.group(2) not in ("0", "1"):
+                    raise ValueError("valid must be 0 or 1")
+                args["valid"] = m.group(2) == "1"
+    except ValueError as e:
+        return "error: %s" % e
+    answer, line = _page_eval(_SRPLUS_JS, args, "https://raidres.top/res/%s" % ref)
+    if line:
+        return line
+    if answer.get("result") == "ok":
+        return "ok srplus"
+    return reserve_line(answer)
+
 def signin(ref):
     validate_ref(ref)
     login_url = "https://raidres.top/"
@@ -1005,6 +1074,14 @@ def watch(parent=None):
                 os.remove(cmd_path)
 
                 words = line.split()
+                if words and words[0] == "srplus":
+                    log("%s ..." % line)
+                    result = set_srplus(words[1:])
+                    log("  -> %s" % result)
+                    with open(result_path, "w", encoding="utf-8") as f:
+                        f.write(result)
+                    continue
+
                 if words and words[0] == "settings":
                     log("%s ..." % line)
                     result = event_settings(words[1:])
@@ -1150,6 +1227,12 @@ def main():
             sys.exit(1)
         result = reserve(words[0], words[1], words[2], None if remove else words[3],
                          words[4] if len(words) == 5 else None, remove=remove, dry=dry)
+        print(result)
+        sys.exit(0 if result.startswith(("ok", "plan")) else 1)
+
+    elif cmd == "srplus":
+        dry = "--dry-run" in args
+        result = set_srplus([w for w in args[1:] if w != "--dry-run"], dry=dry)
         print(result)
         sys.exit(0 if result.startswith(("ok", "plan")) else 1)
 

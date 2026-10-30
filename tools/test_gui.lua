@@ -1782,6 +1782,55 @@ SlashCmdList.RAIDRESBRIDGE("new")
 check("New event afterwards has every row back", tostring(ev2.raid:IsShown()) .. ev2.create:GetText(),
     "trueCreate event")
 
+-- ================================================================== editing one reserve's SR+
+print("one reserve's SR+, edited")
+RB = world()
+RaidResLockReady = function() return 1 end
+fakeDll()
+PAGES["/api/events/DEMO42"] = { body = '{"locked":false,"allowSrPlus":true,"raidId":100,"reservations":[]}' }
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+local aldwyn = findRow(f.pRows, "Aldwyn")
+if aldwyn then click(aldwyn) else RB.player = "Aldwyn"; RB.Draw() end
+local srRow = f.dRows[1]
+fire(srRow, "OnClick", "RightButton")
+check("not offered before raidres says SR+ is on", f.srMenu.ddOpen, nil)
+run(1)
+check("raidres's look at the list says SR+ is on", RB.eventSr.DEMO42, true)
+check("asking nothing extra for it", table.getn(ASKED), 1)
+enter(srRow)
+check("the row says it can be changed", tipHas("Right-click: change its SR+"), true)
+fire(srRow, "OnClick", "RightButton")
+check("right-click opens its SR+ menu", f.srMenu.ddOpen, true)
+check("naming whose and what", string.find(plain(MENU[1].text), "Aldwyn's ", 1, true) == 1, true)
+check("set, validate, unvalidate", plain(MENU[2].text) .. " | " .. plain(MENU[3].text) .. " | " .. plain(MENU[4].text),
+    "Set SR+... (now +0) | Mark validated | Mark not validated")
+local CMD3, RESULT3 = "RaidResBridge_lock_cmd.txt", "RaidResBridge_lock_result.txt"
+pick(MENU[2])
+check("Set asks for the number", POPUP and POPUP.which, "ZYLLARAIDRES_SRPLUS")
+check("for that player", POPUP and POPUP.arg, "Aldwyn")
+FILES[CMD3] = nil
+RB.SendSrPlus(-5)
+check("not a negative one", FILES[CMD3], nil)
+RB.SendSrPlus(40)
+check("the number goes to the helper", FILES[CMD3], "srplus DEMO42 " .. srRow.itemId .. " Aldwyn value=40")
+FILES[RESULT3] = "ok srplus"
+local before = table.getn(ASKED)
+run(1)
+local again = false
+for i = before + 1, table.getn(ASKED) do if ASKED[i] == "/api/events/DEMO42" then again = true end end
+check("saved: the list is fetched again", again, true)
+fire(srRow, "OnClick", "RightButton")
+pick(MENU[3])
+check("validating goes as such", FILES[CMD3], "srplus DEMO42 " .. srRow.itemId .. " Aldwyn valid=1")
+FILES[RESULT3] = "error: Forbidden"
+run(1)
+check("raidres's no comes back in its words", string.find(hint(f), "raidres: Forbidden", 1, true) ~= nil, true)
+RB.eventSr.DEMO42 = false
+f.srMenu.ddOpen = nil
+fire(srRow, "OnClick", "RightButton")
+check("a list without SR+ offers nothing", f.srMenu.ddOpen, nil)
+
 -- ================================================================== SR+ in the window
 print("SR+ beside each reserve")
 RB = world()
