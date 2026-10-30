@@ -173,12 +173,24 @@ end
 --[[ The same conversion the watcher does, line for line, so a list comes out
      identical whichever way it was fetched. The tests hold the two to that. ]]
 --[[ A reservation's SR+ is {id, value, isValid}, or null, and RollFor rolls
-     with the number. isValid is not a gate here: raidres's own option says it
-     decides next event's SR+ increase, not whether this one counts. ]]
-local function srPlus(r)
+     with the number. raidres's own RollFor export sends every SR+ while none
+     is validated, and once an officer validates any, only the validated ones
+     (tried on a test list): `gated` says which. ]]
+local function srPlus(r, gated)
     local sp = r.srPlus
-    if type(sp) == "table" then return tonumber(sp.value) or 0 end
+    if type(sp) == "table" then
+        if gated and sp.isValid ~= true then return 0 end
+        return tonumber(sp.value) or 0
+    end
+    if gated then return 0 end
     return tonumber(sp) or 0
+end
+
+local function anyValidated(event)
+    for _, r in ipairs(event.reservations or {}) do
+        if type(r.srPlus) == "table" and r.srPlus.isValid == true then return true end
+    end
+    return false
 end
 
 --[[ Which SR+ an officer validated, kept beside the list rather than in it:
@@ -214,6 +226,7 @@ function RB.Convert(ref, event, raid)
     for _, it in ipairs(raid.raidItems or {}) do byItem[it.id] = it end
 
     local chars, order, skipped = {}, {}, 0
+    local gated = anyValidated(event)
     for _, r in ipairs(event.reservations or {}) do
         local item = byItem[r.raidItemId]
         local name = r.character and r.character.name
@@ -229,7 +242,7 @@ function RB.Convert(ref, event, raid)
             table.insert(chars[name].items, {
                 id = item.gameDbItemId,
                 quality = item.quality or 4,
-                sr_plus = srPlus(r),
+                sr_plus = srPlus(r, gated),
             })
         end
     end

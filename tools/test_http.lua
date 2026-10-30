@@ -218,7 +218,22 @@ do
         end
     end
     table.sort(values)
-    check("SR+ reaches RollFor as numbers, validated or not", table.concat(values, ","), "10,20,30")
+    check("once any SR+ is validated, only the validated reach RollFor", table.concat(values, ","), "10,30")
+    do
+        -- none validated: raidres exports them all
+        local none = RB.Json.decode(slurp("event_SRPLUS.json"))
+        for _, r in ipairs(none.reservations) do
+            if type(r.srPlus) == "table" then r.srPlus.isValid = false end
+        end
+        local all = {}
+        for _, p in ipairs(RB.Convert("SRPLUS", none, raid).softreserves) do
+            for _, it in ipairs(p.items) do
+                if it.sr_plus ~= 0 then table.insert(all, it.sr_plus) end
+            end
+        end
+        table.sort(all)
+        check("with none validated, every SR+ reaches RollFor", table.concat(all, ","), "10,20,30")
+    end
     check("and none is 0, not a table", type(data.softreserves[1].items[1].sr_plus), "number")
 
     for _, id in ipairs({ 94, 100, 101 }) do

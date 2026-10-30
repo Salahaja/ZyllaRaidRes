@@ -80,13 +80,18 @@ def reference(text):
     return "".join(c for c in text if c.isalnum())
 
 
-def sr_plus(r):
+def sr_plus(r, gated=False):
     """A reservation's SR+ is {id, value, isValid}, or null, and RollFor rolls
-    with the number. isValid is not a gate: raidres's own option says it
-    decides next event's SR+ increase, not whether this one counts."""
+    with the number. raidres's own RollFor export sends every SR+ while none
+    is validated, and once an officer validates any, only the validated ones
+    (tried on a test list): `gated` says which."""
     sp = r.get("srPlus")
     if isinstance(sp, dict):
+        if gated and sp.get("isValid") is not True:
+            return 0
         sp = sp.get("value")
+    elif gated:
+        return 0
     try:
         return int(sp or 0)
     except (TypeError, ValueError):
@@ -107,6 +112,8 @@ def build(ref):
     characters = {}
     order = []
     skipped = 0
+    gated = any(isinstance(r.get("srPlus"), dict) and r["srPlus"].get("isValid") is True
+                for r in event.get("reservations", []))
     for r in event.get("reservations", []):
         item = by_raid_item.get(r["raidItemId"])
         if not item:
@@ -125,7 +132,7 @@ def build(ref):
         characters[name]["items"].append({
             "id": item["gameDbItemId"],
             "quality": item.get("quality", 4),
-            "sr_plus": sr_plus(r),
+            "sr_plus": sr_plus(r, gated),
         })
 
     hard = []

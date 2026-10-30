@@ -76,7 +76,8 @@ rb.get = get
 data, stats = rb.build(REF)
 
 # The same list as an SR+ event, in raidres's shape: srPlus is {id, value,
-# isValid}. One entry is not validated, which must not matter to the roll.
+# isValid}. One entry is not validated: with the others validated, raidres
+# leaves its SR+ out of the roll.
 SR = "SRPLUS"
 sr_event = json.load(io.open(EVENT, encoding="utf-8"))
 sr_event.update(reference=SR, allowSrPlus=True)
