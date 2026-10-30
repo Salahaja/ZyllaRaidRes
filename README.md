@@ -576,9 +576,12 @@ checkbox does, the current one ticked when raidres has said which. It makes the 
 the list's owner and its admins can; raidres says so if you can't. The list
 is fetched again afterwards.
 
-**Reserving for someone who can't use the site**: right-click them in the
-Players list and tick **Reserve on raidres for them**, or pick **Add someone
-not listed...** and give their name and class. Their loot clicks then go to
+**Reserving for someone who can't use the site**: on a raidres list, the first
+loot click for someone raidres doesn't have yet asks **On raidres** or **Only
+here** (only here goes to RollFor, not raidres), and remembers the answer for
+that player on that list. Their right-click menu's **Reserve on raidres for
+them** tick shows and changes it. For someone not in your group, pick **Add
+someone not listed...** and give their name and class. Their loot clicks then go to
 raidres as raidres's own "This reservation is for another player". It asks for
 their spec once, and the X takes their reserve back off. That option is only
 for the list's owner and its admins, and the reserve is filed under your

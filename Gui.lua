@@ -873,8 +873,9 @@ end
 
 --[[ Who you reserve for on a list, kept with it (RaidResBridge_ForOthers),
      so a /reload doesn't quietly send their next clicks to the typed list:
-       [lower(ref)][key(name)] = { name, class, on, added }
-     `on`: their loot clicks go to raidres. `added`: added here by name and
+       [lower(ref)][key(name)] = { name, class, on, added, here }
+     `on`: their loot clicks go to raidres. `here`: they stay on the list
+     typed here, unasked (RB.ShouldAskWhere). `added`: added here by name and
      class, shown on that list's player list until it's forgotten. Only the
      lists still on the Recent menu are kept (RB.RememberList). ]]
 function RB.OthersFor(ref)
@@ -1053,6 +1054,62 @@ function RB.RemoveTheirs()
     RB.Draw()
 end
 
+-- ---------------------------------------------------------------------------
+-- On raidres, or only here? Asked once per player per list
+--
+-- On a raidres list, with the lock helper, the first loot click for someone
+-- raidres doesn't have yet asks where it goes. The answer is kept with the
+-- list (RaidResBridge_ForOthers): `on` is the same tick as their right-click
+-- menu's, `here` keeps their clicks on the list typed here, unasked.
+-- ---------------------------------------------------------------------------
+
+function RB.ShouldAskWhere(s, name)
+    if not (s and s.ref and s.ref ~= "manual" and name) then return false end
+    if not (RB.LockControlReady and RB.LockControlReady()) then return false end
+    if RB.MySignup(s, name) ~= nil then return false end
+    local k = key(name)
+    local x = RB.OthersFor(s.ref)[k]
+    if x and (x.on or x.here) then return false end
+    -- already on raidres: signed up there, or reserved for by someone
+    if s.web[k] and next(s.web[k]) then return false end
+    -- raidres needs their class, from your group or a spec kept for them
+    return RB.ClassOf(name, s.ref) ~= nil
+end
+
+function RB.AskWhere(id)
+    local s = RB.gui and RB.gui.snap
+    local who = RB.player
+    if not s or not who then return end
+    RB.whereTarget = { ref = s.ref, item = id, name = who }
+    if not StaticPopupDialogs.ZYLLARAIDRES_WHERE then
+        StaticPopupDialogs.ZYLLARAIDRES_WHERE = {
+            text = "Reserve %s for %s on raidres, or only here?\n\nOnly here goes to RollFor " ..
+                "but not raidres. Asked once; their right-click menu changes it.",
+            button1 = "On raidres",
+            button2 = "Only here",
+            OnAccept = function() RB.WhereChosen(true) end,
+            OnCancel = function() RB.WhereChosen(false) end,
+            timeout = 0, whileDead = 1, hideOnEscape = 1,
+        }
+    end
+    StaticPopup_Show("ZYLLARAIDRES_WHERE", RB.ItemInfo(id), who)
+end
+
+--- The answer: kept for this player on this list, then the click goes there.
+function RB.WhereChosen(raidres)
+    local t = RB.whereTarget
+    RB.whereTarget = nil
+    if not t then return end
+    local list = RB.OthersFor(t.ref)
+    local x = list[key(t.name)] or { name = t.name }
+    if raidres then x.on, x.here = true, nil else x.on, x.here = nil, true end
+    list[key(t.name)] = x
+    local s = RB.gui and RB.gui.snap
+    if not s or s.ref ~= t.ref then RB.Draw() return end
+    RB.player = t.name
+    RB.ClickItem({ item = { g = t.item } })
+end
+
 -- A player row's right-click: their reserves on raidres, or someone new.
 function RB.OpenPlayerMenu(p)
     local s = RB.gui and RB.gui.snap
@@ -1073,8 +1130,9 @@ local function onPickPlayerMenu()
         local k = key(p.name)
         local x = list[k] or { name = p.name }
         x.on = not x.on or nil
-        -- one not added here and no longer ticked has nothing left to keep
-        if x.on or x.added then list[k] = x else list[k] = nil end
+        -- unticked is an answer too: their clicks stay here, unasked
+        x.here = (not x.on) or nil
+        list[k] = x
         if x.on then RB.player = p.name end
         RB.Draw()
     elseif (this.value == "admin" or this.value == "unadmin") and p then
@@ -1278,6 +1336,10 @@ function RB.ClickItem(data)
         RB.ReserveForOther(id, (s.web[k] and s.web[k][id]) and true or false)
         return
     end
+    if RB.ShouldAskWhere(s, who) then
+        RB.AskWhere(id)
+        return
+    end
     if s.web[k] and s.web[k][id] then
         RB.Notice(who .. " reserved that on raidres; change it there.")
         return
@@ -1422,6 +1484,9 @@ function RB.ItemTooltip(owner, id)
                         0.13, 1, 0.13)
                 elseif forOther then
                     GameTooltip:AddLine("Click: reserve it on raidres for " .. who, 0.13, 1, 0.13)
+                elseif RB.ShouldAskWhere(s, who) then
+                    GameTooltip:AddLine("Click: reserve for " .. who .. ", on raidres or only here (asks once)",
+                        0.13, 1, 0.13)
                 else
                     GameTooltip:AddLine("Click: reserve for " .. who, 0.13, 1, 0.13)
                 end

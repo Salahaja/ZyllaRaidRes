@@ -1845,13 +1845,41 @@ TAG = saved
 check("an answer without an id says the helper running is an old one",
     string.find(hint(f), "older copy; restart the game", 1, true) ~= nil, true)
 
-print("everyone else's, and without the helper")
+print("everyone else's: on raidres or only here, asked once")
 local other = findRow(f.pRows, "Newbie")
 click(other)
-FILES[CMD] = nil
-click(firstItemRow(f))
-check("someone else's still go in as typed", RaidResBridge_Manual.newbie ~= nil, true)
+FILES[CMD], POPUP = nil, nil
+do
+local firstLoot = firstItemRow(f)
+enter(firstLoot)
+check("the tooltip says a click asks", tipHas("Click: reserve for Newbie, on raidres or only here (asks once)"), true)
+click(firstLoot)
+check("someone raidres doesn't have yet: the first click asks", POPUP and POPUP.which, "ZYLLARAIDRES_WHERE")
+check("naming the item and them", POPUP and POPUP.arg ~= nil, true)
+check("nothing typed or sent before the answer", (RaidResBridge_Manual.newbie == nil) and FILES[CMD] == nil, true)
+StaticPopupDialogs.ZYLLARAIDRES_WHERE.OnCancel()
+check("only here: typed", RaidResBridge_Manual.newbie ~= nil, true)
 check("not to raidres", FILES[CMD], nil)
+check("and kept for this list", RaidResBridge_ForOthers.demo42.newbie.here, true)
+POPUP = nil
+click(firstLoot)
+check("the next click doesn't ask again", POPUP, nil)
+-- the right-click tick changes the answer either way
+RB.OthersFor("DEMO42").newbie = nil
+RaidResBridge_Manual.newbie = nil
+RB.Refresh()
+click(firstItemRow(f))
+StaticPopupDialogs.ZYLLARAIDRES_WHERE.OnAccept()
+check("on raidres: their clicks go there from now on", RB.ForOther("DEMO42", "Newbie"), true)
+check("and this one goes too, asking their spec first", f.specMenu.ddOpen, true)
+check("nothing typed", RaidResBridge_Manual.newbie, nil)
+fire(findRow(f.pRows, "Newbie"), "OnClick", "RightButton")
+local untick
+for _, info in ipairs(MENU) do if info.value == "toggle" then untick = info end end
+pick(untick)
+check("unticked is an answer too: only here, unasked",
+    tostring(RB.ForOther("DEMO42", "Newbie")) .. " " .. tostring(RaidResBridge_ForOthers.demo42.newbie.here), "false true")
+end
 RB = world()
 SlashCmdList.RAIDRESBRIDGE("")
 f = RB.gui
