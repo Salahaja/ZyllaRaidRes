@@ -134,7 +134,7 @@ if not w.start_chrome("about:blank", headless=True):
 tab = next(t for t in w.cdp_tabs() if t.get("type") == "page" and t.get("webSocketDebuggerUrl"))
 ws = w.WebSocket(tab["webSocketDebuggerUrl"])
 
-def run(args, me="1000", event=None, chars=None, reply=None, script=None, tpls=None):
+def run(args, me="1000", event=None, chars=None, reply=None, script=None, tpls=None, sugg=None):
     """Run an in-page script once against a stand-in site. Returns (answer, sent)."""
     site = {
         "me": {"status": 200, "body": {"id": me}} if me else {"status": 401, "body": None},
@@ -143,6 +143,7 @@ def run(args, me="1000", event=None, chars=None, reply=None, script=None, tpls=N
         "chars": {"status": 200, "body": chars if chars is not None else []},
         "reply": reply or {"status": 201, "body": {"ok": True}},
         "tpls": {"status": 200, "body": tpls if tpls is not None else []},
+        "sugg": sugg or {"status": 201, "body": []},
     }
     stand_in = r"""
     (site) => {
@@ -159,6 +160,10 @@ def run(args, me="1000", event=None, chars=None, reply=None, script=None, tpls=N
         else if (url.startsWith('/raids/raid_')) r = site.raid;
         else if (url === '/api/user-characters') r = site.chars;
         else if (url === '/api/raid-event-templates') r = site.tpls;
+        else if (url.startsWith('/api/sr-plus/previous-event-suggestions?raidId=')) {
+          window.__sent.push({ url, method: 'GET' });
+          r = site.sugg;
+        }
         else if (url === '/api/events' || url.startsWith('/api/raid-event-reservations')) {
           window.__sent.push({ url, method: opts.method, body: JSON.parse(opts.body) });
           r = site.reply;
@@ -371,6 +376,33 @@ try:
                        event=copy.deepcopy(OPEN) | {"isAuthor": False})
     check("someone else's list is refused before sending", (answer.get("message"), sent),
           ("that list isn't yours to change", []))
+
+    print("the events SR+ can carry on from")
+    # as raidres answered for Molten Core on 2026-10-30
+    sugg = [{"allowSrPlusInput": False, "defaultSrPlusIncrease": 0, "raidName": "Molten Core",
+             "reference": "WASZWA", "srPlusAllowEventSkipCount": 2,
+             "startTime": "2026-10-25T23:00:00.000Z", "requireSrPlusValidation": False},
+            {"allowSrPlusInput": True, "defaultSrPlusIncrease": 10, "raidName": "Molten Core",
+             "reference": "7D6NTD", "srPlusAllowEventSkipCount": 0,
+             "startTime": "2026-11-21T01:00:00.000Z", "requireSrPlusValidation": True}]
+    answer, sent = run({"raid": 95}, script=w._SUGGEST_JS, sugg={"status": 201, "body": sugg})
+    check("asked for that raid", sent, [{"url": "/api/sr-plus/previous-event-suggestions?raidId=95",
+                                         "method": "GET"}])
+    check("newest first, small, with the settings the form copies", answer, {"result": "ok", "events": [
+        {"ref": "7D6NTD", "start": 1795222800, "inc": 10, "skip": 0, "input": True, "valid": True},
+        {"ref": "WASZWA", "start": 1792969200, "inc": 0, "skip": 2, "input": False, "valid": False}]})
+    answer, sent = run({"raid": 95}, script=w._SUGGEST_JS, sugg={"status": 500, "body": None})
+    check("raidres's trouble said", answer, {"result": "error", "message": "raidres said HTTP 500"})
+    answer, sent = run({"raid": 95}, me=None, script=w._SUGGEST_JS)
+    check("signed out, asks to sign in", answer, {"result": "signin"})
+    check("a bad raid isn't sent", w.suggest(["x"]), "error: bad command")
+    answer, sent = run({"ref": "DEMO42", "sr": True, "inc": 10, "prev": "OLD111", "skip": 2,
+                        "input": False, "valid": True},
+                       script=w._SETTINGS_JS, event=mine, reply={"status": 200, "body": {}})
+    body = sent[0]["body"]
+    check("settings carry what the earlier event had",
+          (body["srPlusAllowEventSkipCount"], body["allowSrPlusInput"], body["requireSrPlusValidation"]),
+          (2, False, True))
 
     print("one reserve's SR+")
     sr = copy.deepcopy(OPEN) | {"allowSrPlus": True}

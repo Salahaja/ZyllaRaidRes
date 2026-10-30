@@ -222,11 +222,15 @@ function RB.RememberList(ref, data)
     local meta = data and data.metadata or {}
     local raid = RaidResBridge_Raids and meta.instance and RaidResBridge_Raids[meta.instance]
     local place = (raid and raid.name) or (meta.instances and meta.instances[1]) or nil
+    -- whether it has SR+, as raidres last said, kept for "SR+ from"
+    local sr = RB.eventSr and RB.eventSr[ref]
     local list = { { ref = ref, place = place, at = time and time() or nil } }
     local perRaid, raids = { [place or "?"] = 1 }, 1
     for _, r in ipairs(RaidResBridge_Recent or {}) do
         local p = r.place or "?"
-        if string.lower(r.ref or "") ~= string.lower(ref) then
+        if string.lower(r.ref or "") == string.lower(ref) then
+            if sr == nil then sr = r.sr end
+        else
             if not perRaid[p] and raids < RB.RECENT_RAIDS then
                 perRaid[p], raids = 0, raids + 1
             end
@@ -236,6 +240,7 @@ function RB.RememberList(ref, data)
             end
         end
     end
+    list[1].sr = sr
     RaidResBridge_Recent = list
 end
 

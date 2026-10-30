@@ -682,6 +682,28 @@ async (a) => {
 }
 """
 
+# The user's own earlier events of a raid that had SR+ on -- the list
+# raidres's form offers under "Select previous event" -- newest first, with
+# the SR+ settings the form copies from the one picked.
+_SUGGEST_JS = r"""
+async (a) => {
+""" + _PAGE_HELPERS + r"""
+  if (await signedIn() == null) return answer({ result: 'signin' });
+  const t = await get('/api/sr-plus/previous-event-suggestions?raidId=' + a.raid);
+  if (!t.ok) return answer({ result: 'error', message: 'raidres said HTTP ' + t.status });
+  const list = Array.isArray(t.body) ? t.body : ((t.body && t.body.data) || []);
+  const events = list.filter(x => x && typeof x.reference === 'string').map(x => ({
+    ref: x.reference,
+    start: Math.floor((Date.parse(x.startTime) || 0) / 1000),
+    inc: Number(x.defaultSrPlusIncrease) || 0,
+    skip: Number(x.srPlusAllowEventSkipCount) || 0,
+    input: x.allowSrPlusInput !== false,
+    valid: x.requireSrPlusValidation === true }));
+  events.sort((p, q) => q.start - p.start);
+  return answer({ result: 'ok', events: events.slice(0, 12) });
+}
+"""
+
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _CLOCK_RE = re.compile(r"^\d{2}:\d{2}$")
 _OPTION_RE = re.compile(r"^(hr|tpl|inc|skip|input|valid|prev)=(\S*)$")
@@ -819,6 +841,19 @@ def templates():
         return "ok templates " + json.dumps(answer.get("lists", []), ensure_ascii=False)
     return reserve_line(answer)
 
+def suggest(words):
+    """suggest RAIDID -> ok suggest RAIDID [{"ref","start","inc","skip","input","valid"},...]"""
+    try:
+        raid = int(words[0])
+    except (IndexError, ValueError):
+        return "error: bad command"
+    answer, line = _page_eval(_SUGGEST_JS, {"raid": raid})
+    if line:
+        return line
+    if answer.get("result") == "ok":
+        return "ok suggest %d %s" % (raid, json.dumps(answer.get("events", []), ensure_ascii=False))
+    return reserve_line(answer)
+
 # ---------------------------------------------------------------------------
 # An existing event's hard reserves and SR+
 #
@@ -868,6 +903,9 @@ async (a) => {
     if (a.sr) {
       if (a.inc != null) body.defaultSrPlusIncrease = a.inc;
       if (a.prev !== undefined) body.previousRaidEventReference = a.prev;
+      if (a.skip != null) body.srPlusAllowEventSkipCount = a.skip;
+      if (a.input != null) body.allowSrPlusInput = a.input;
+      if (a.valid != null) body.requireSrPlusValidation = a.valid;
     }
   }
   if (a.dry) return answer({ result: 'plan', method: 'PATCH', body });
@@ -878,14 +916,15 @@ async (a) => {
 """
 
 def event_settings(words, dry=False):
-    """settings REF [hr=ID,ID|hr=none|tpl=ID] [srplus=0|1] [inc=N] [prev=REF|prev=none]"""
+    """settings REF [hr=ID,ID|hr=none|tpl=ID] [srplus=0|1] [inc=N] [prev=REF|prev=none]
+                [skip=N] [input=0|1] [valid=0|1]"""
     if not words:
         return "error: bad command"
     try:
         ref = validate_ref(words[0])
         opts = {}
         for w in words[1:]:
-            m = re.match(r"^(hr|tpl|srplus|inc|prev)=(\S+)$", w)
+            m = re.match(r"^(hr|tpl|srplus|inc|prev|skip|input|valid)=(\S+)$", w)
             if not m:
                 raise ValueError("bad setting: %r" % w)
             opts[m.group(1)] = m.group(2)
@@ -904,6 +943,15 @@ def event_settings(words, dry=False):
                 raise ValueError("SR+ increase out of range")
         if "prev" in opts:
             args["prev"] = None if opts["prev"] == "none" else validate_ref(opts["prev"])
+        if "skip" in opts:
+            args["skip"] = int(opts["skip"])
+            if not 0 <= args["skip"] <= 10:
+                raise ValueError("SR+ skip count out of range")
+        for k in ("input", "valid"):
+            if k in opts:
+                if opts[k] not in ("0", "1"):
+                    raise ValueError("%s must be 0 or 1" % k)
+                args[k] = opts[k] == "1"
     except ValueError as e:
         return "error: %s" % e
     answer, line = _page_eval(_SETTINGS_JS, args, "https://raidres.top/res/%s" % ref)
@@ -1103,6 +1151,13 @@ def watch(parent=None):
                         f.write(result)
                     continue
 
+                if words and words[0] == "suggest":
+                    result = suggest(words[1:])
+                    log("suggest -> %s" % result[:80])
+                    with open(result_path, "w", encoding="utf-8") as f:
+                        f.write(result)
+                    continue
+
                 if words == ["templates"]:
                     result = templates()
                     log("templates -> %s" % result[:80])
@@ -1264,6 +1319,11 @@ def main():
         result = event_settings([w for w in args[1:] if w != "--dry-run"], dry=dry)
         print(result)
         sys.exit(0 if result.startswith(("ok", "plan")) else 1)
+
+    elif cmd == "suggest":
+        result = suggest(args[1:])
+        print(result)
+        sys.exit(0 if result.startswith("ok") else 1)
 
     elif cmd == "templates":
         result = templates()

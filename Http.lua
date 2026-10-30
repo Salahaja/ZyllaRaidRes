@@ -468,17 +468,31 @@ end
      costs no request of its own. ]]
 RB.eventSr = RB.eventSr or {}
 function RB.NoteEventSr(ref, event)
-    if type(event) == "table" and ref then RB.eventSr[ref] = event.allowSrPlus == true end
+    if type(event) ~= "table" or not ref then return end
+    local on = event.allowSrPlus == true
+    RB.eventSr[ref] = on
+    -- and on the Recent list, for the next event's "SR+ from" to know
+    for _, r in ipairs(RaidResBridge_Recent or {}) do
+        if string.lower(r.ref or "") == string.lower(ref) then r.sr = on end
+    end
 end
 
---[[ An event's SR+ settings as raidres has them now, for the Event settings
-     window to start from. done({srplus, inc, prev}) or done(nil, why). ]]
+--[[ An event's SR+ settings as raidres has them now: for the Event settings
+     window to start from, and to check a code typed as the one SR+ carries
+     from. done({ref, raid, srplus, inc, skip, input, valid, prev}) or
+     done(nil, why). ]]
 function RB.HttpEventSettings(ref, done)
     RB.Get("/api/events/" .. ref, function(status, body)
         local e, why = decoded(status, body, "list " .. ref)
         if not e then done(nil, why) return end
-        done({ srplus = e.allowSrPlus == true,
+        RB.NoteEventSr(ref, e)
+        done({ ref = type(e.reference) == "string" and e.reference or ref,
+               raid = e.raidId,
+               srplus = e.allowSrPlus == true,
                inc = tonumber(e.defaultSrPlusIncrease) or 0,
+               skip = tonumber(e.srPlusAllowEventSkipCount) or 0,
+               input = e.allowSrPlusInput ~= false,
+               valid = e.requireSrPlusValidation == true,
                prev = type(e.previousRaidEventReference) == "string" and e.previousRaidEventReference or nil })
     end, true)
 end
@@ -768,6 +782,16 @@ end
 
 local CREATE_TIMEOUT = 45
 
+-- What SR+ carries from the event it follows, as the site copies it: how many
+-- events may be skipped, whether people type their own, whether it's checked.
+local function carried(e)
+    local out = ""
+    if e.skip then out = out .. " skip=" .. e.skip end
+    if e.input ~= nil then out = out .. " input=" .. (e.input and "1" or "0") end
+    if e.valid ~= nil then out = out .. " valid=" .. (e.valid and "1" or "0") end
+    return out
+end
+
 function RB.SendCreateCommand(e)
     if not RB.LockControlReady() or RB.HelperBusy() then return false end
     local function bit(v) return v and "1" or "0" end
@@ -780,7 +804,7 @@ function RB.SendCreateCommand(e)
         opts = opts .. " hr=" .. table.concat(e.hr, ",")
     end
     if e.srplus then
-        opts = opts .. " inc=" .. (e.inc or 0)
+        opts = opts .. " inc=" .. (e.inc or 0) .. carried(e)
         if e.prev then opts = opts .. " prev=" .. e.prev end
     end
     local cmd = "create " .. e.raid .. " " .. e.day .. " " .. e.clock .. " " .. e.limit ..
@@ -807,7 +831,7 @@ function RB.SendSettingsCommand(ref, e)
     end
     cmd = cmd .. " srplus=" .. (e.srplus and "1" or "0")
     if e.srplus then
-        cmd = cmd .. " inc=" .. (e.inc or 0) .. " prev=" .. (e.prev or "none")
+        cmd = cmd .. " inc=" .. (e.inc or 0) .. " prev=" .. (e.prev or "none") .. carried(e)
     end
     pcall(WriteCustomFile, LOCK_RESULT, "", "w")
     if not pcall(WriteCustomFile, LOCK_CMD, cmd, "w") then return false end
@@ -842,6 +866,27 @@ function RB.SendTemplatesCommand()
     return true
 end
 
+--[[ Your earlier events of a raid that had SR+ on, as raidres's own form
+     offers them to carry SR+ from: "ok suggest RAIDID [{ref, start, inc,
+     skip, input, valid}, ...]", newest first. ]]
+function RB.SendSuggestCommand(raid)
+    if not RB.LockControlReady() or RB.HelperBusy() then return false end
+    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
+    if not pcall(WriteCustomFile, LOCK_CMD, "suggest " .. raid, "w") then return false end
+    RB.createPending = { suggest = raid, sent = GetTime() }
+    lockTick:Show()
+    return true
+end
+
+-- "ok suggest RAIDID [...]" as the raid and a Lua list, or nil.
+function RB.ReadSuggest(text)
+    local _, _, raid, json = string.find(text, "^ok suggest (%d+) (.*)$")
+    if not raid then return nil end
+    local ok, list = pcall(Json.decode, json)
+    if not ok or type(list) ~= "table" then return nil end
+    return tonumber(raid), list
+end
+
 -- "ok templates [...]" as a Lua list, or nil.
 function RB.ReadTemplates(text)
     if string.sub(text, 1, 13) ~= "ok templates " then return nil end
@@ -865,6 +910,8 @@ function RB.CheckCreateResult()
     RB.createPending = nil
     if pending.templates then
         if RB.OnTemplatesResult then RB.OnTemplatesResult(text) end
+    elseif pending.suggest then
+        if RB.OnSuggestResult then RB.OnSuggestResult(pending, text) end
     elseif pending.srplus then
         if RB.OnSrPlusResult then RB.OnSrPlusResult(pending, text) end
     elseif RB.OnCreateResult then

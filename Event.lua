@@ -119,7 +119,10 @@ end
 local function onPickRaid()
     local e = form()
     -- another raid's loot can't be hard-reserved here
-    if e.raid ~= this.value then e.hr, e.tpl, e.tplName, e.prev = {}, nil, nil, nil end
+    if e.raid ~= this.value then
+        e.hr, e.tpl, e.tplName, e.prev = {}, nil, nil, nil
+        e.skip, e.input, e.valid = nil, nil, nil
+    end
     e.raid = this.value
     picked()
 end
@@ -133,6 +136,8 @@ local function add(text, value, func, checked)
     info.text = text
     if value == nil then
         info.isTitle = 1
+    elseif value == "-" then
+        info.disabled = 1       -- a line to read, not to pick
     else
         info.value = value
         info.func = func
@@ -297,8 +302,17 @@ end
 
 local function onPickInc() form().inc = this.value; picked() end
 local function onPickPrev()
-    form().prev = (this.value ~= "none") and this.value or nil
-    picked()
+    if CloseDropDownMenus then CloseDropDownMenus() end
+    if this.value == "type" then
+        RB.AskPrevCode()
+        return
+    end
+    local e = form()
+    local got
+    for _, s in ipairs((RB.prevSuggest and RB.prevSuggest[e.raid]) or {}) do
+        if s.ref == this.value then got = s end
+    end
+    RB.PickPrev(this.value ~= "none" and this.value or nil, got)
 end
 
 function RB.InitEventIncMenu()
@@ -307,15 +321,56 @@ function RB.InitEventIncMenu()
     for _, n in ipairs(INCREASES) do add("+" .. n, n, onPickInc, n == e.inc) end
 end
 
--- None, or one of your recent lists for the same raid: SR+ carries from it.
+--[[ Where SR+ carries from: nothing; one of your own earlier events of this
+     raid that had SR+ on, as raidres's form lists them (asked of raidres
+     through the helper); one of the lists fetched here lately, marked when
+     raidres said SR+ was off on it; or any code or link, typed. ]]
+RB.prevSuggest, RB.prevAsked = {}, {}
+
+local function same(a, b) return string.lower(a or "") == string.lower(b or "") end
+
 function RB.InitEventPrevMenu()
     local e = form()
     if not e then return end
+    local f = RB.eventFrame
+    local own = f and f.mode       -- in Event settings, the event itself isn't offered
     add("Start fresh", "none", onPickPrev, not e.prev)
+    local shown = {}
     local name = e.raid and raidName(e.raid)
-    for _, r in ipairs(RaidResBridge_Recent or {}) do
-        if name and r.place == name then add(r.ref, r.ref, onPickPrev, e.prev == r.ref) end
+    add("Your SR+ events" .. (name and (" of " .. name) or "") .. " on raidres")
+    local list = e.raid and RB.prevSuggest[e.raid]
+    if list then
+        local any = false
+        for _, s in ipairs(list) do
+            if not same(s.ref, own) then
+                any = true
+                shown[string.lower(s.ref)] = true
+                local when = (s.start and s.start > 0) and date("%a %d %b", s.start) or ""
+                add(s.ref .. UI.hex(UI.GREY, "  " .. when .. "  +" .. (s.inc or 0)),
+                    s.ref, onPickPrev, same(e.prev, s.ref))
+            end
+        end
+        if not any then add(UI.hex(UI.GREY, "  none yet"), "-", nil) end
+    elseif RB.prevAsked[e.raid] == "failed" then
+        add(UI.hex(UI.GREY, "  raidres didn't say"), "-", nil)
+    elseif e.raid then
+        add(UI.hex(UI.GREY, "  asking raidres..."), "-", nil)
     end
+    local first = true
+    for _, r in ipairs(RaidResBridge_Recent or {}) do
+        if name and r.place == name and not shown[string.lower(r.ref)] and not same(r.ref, own) then
+            if first then add("Fetched lately") first = false end
+            shown[string.lower(r.ref)] = true
+            if r.sr == false then
+                add(UI.hex(UI.GREY, r.ref .. "  SR+ was off"), "-", nil)
+            else
+                add(r.ref, r.ref, onPickPrev, same(e.prev, r.ref))
+            end
+        end
+    end
+    if e.prev and not shown[string.lower(e.prev)] then add(e.prev, e.prev, onPickPrev, true) end
+    add("Other")
+    add("Type a code or link...", "type", onPickPrev)
 end
 
 -- ---------------------------------------------------------------------------
@@ -461,9 +516,115 @@ local function note(text, colour)
     if f then f.status:SetText(colour and UI.hex(colour, text) or text) end
 end
 
+--[[ The prior event picked: its SR+ settings come along with it, as the
+     site copies them -- when it says how much each event adds, anyway. ]]
+function RB.PickPrev(ref, from)
+    local e = form()
+    if not e then return end
+    e.prev = ref
+    if not ref then
+        e.skip, e.input, e.valid = nil, nil, nil
+    elseif from and (from.inc or 0) > 0 then
+        e.inc, e.skip, e.input, e.valid = from.inc, from.skip, from.input, from.valid
+        note("SR+ carries on from " .. ref .. ", +" .. from.inc .. " each event, as it had.")
+    else
+        note("SR+ carries on from " .. ref .. ".")
+    end
+    RB.DrawNewEvent()
+end
+
+-- raidres's codes are six letters and digits; a link ends in one.
+function RB.ParsePrevCode(text)
+    text = string.gsub(text or "", "%s", "")
+    local _, _, tail = string.find(text, "/res/([%w]+)")
+    local code = tail or text
+    if not string.find(code, "^%w%w%w%w%w%w$") then return nil end
+    return string.upper(code)
+end
+
+function RB.AskPrevCode()
+    if not StaticPopupDialogs.ZYLLARAIDRES_PREVCODE then
+        StaticPopupDialogs.ZYLLARAIDRES_PREVCODE = {
+            text = "Carry SR+ on from which event? Its code or link:",
+            button1 = "OK",
+            button2 = "Cancel",
+            hasEditBox = 1,
+            maxLetters = 60,
+            OnAccept = function()
+                local box = getglobal(this:GetParent():GetName() .. "EditBox")
+                RB.SetPrevCode(box and box:GetText())
+            end,
+            EditBoxOnEnterPressed = function()
+                RB.SetPrevCode(this:GetText())
+                this:GetParent():Hide()
+            end,
+            timeout = 0, whileDead = 1, hideOnEscape = 1,
+        }
+    end
+    StaticPopup_Show("ZYLLARAIDRES_PREVCODE")
+end
+
+--[[ A typed one is looked at first, with the DLL: raidres takes SR+ only
+     from an event of the same raid that had it on, so this says so here
+     rather than after Create. Without the DLL, raidres says it then. ]]
+function RB.SetPrevCode(text)
+    local f, e = RB.eventFrame, form()
+    if not f or not e then return end
+    local ref = RB.ParsePrevCode(text)
+    if not ref then
+        note("That isn't a raidres code: six letters and digits, or its link.", UI.RED)
+        return
+    end
+    if same(ref, f.mode) then
+        note("That's this event itself.", UI.RED)
+        return
+    end
+    if not (RB.Http and RB.Http()) then
+        RB.PickPrev(ref)
+        note("SR+ carries on from " .. ref .. "; raidres checks it when you save.", UI.GOLD)
+        return
+    end
+    note("Looking at " .. ref .. " on raidres...", UI.GOLD)
+    local raid = e.raid
+    RB.HttpEventSettings(ref, function(got, why)
+        local now = form()
+        if not now or now.raid ~= raid then return end
+        if not got then
+            note(why or ("raidres has no list " .. ref), UI.RED)
+        elseif got.raid ~= raid then
+            note(ref .. " is for another raid: SR+ carries on only within one raid.", UI.RED)
+        elseif not got.srplus then
+            note(ref .. " didn't have SR+ on, so there's nothing to carry on from.", UI.RED)
+        else
+            RB.PickPrev(got.ref, got)
+        end
+    end)
+end
+
+-- Your SR+ events of the raid picked, asked once a session when SR+ is on.
+local function askSuggestions(e)
+    if not (e.srplus and e.raid) or RB.prevSuggest[e.raid] or RB.prevAsked[e.raid] then return end
+    if RB.sessionExpired or not (RB.LockControlReady and RB.LockControlReady()) then return end
+    if RB.HelperBusy() then return end
+    if RB.SendSuggestCommand(e.raid) then RB.prevAsked[e.raid] = true end
+end
+
+function RB.OnSuggestResult(pending, text)
+    local raid, list = RB.ReadSuggest(text)
+    if raid and list then
+        RB.prevSuggest[raid], RB.prevAsked[raid] = list, nil
+        for _, s in ipairs(list) do RB.eventSr[s.ref] = true end
+    else
+        RB.prevAsked[pending.suggest] = "failed"
+        if string.sub(text, 1, 6) == "signin" then RB.sessionExpired = true end
+    end
+    RB.DrawNewEvent()
+end
+
 function RB.DrawNewEvent()
     local f, e = RB.eventFrame, RB.eventForm
     if not f or not e then return end
+    askSuggestions(e)
     UIDropDownMenu_SetText((e.raid and raidName(e.raid)) or "Pick a raid", f.raid)
     UIDropDownMenu_SetText(dayName(e.day), f.day)
     UIDropDownMenu_SetText(two(e.hour), f.hour)
@@ -652,6 +813,7 @@ function RB.CreateEvent()
         raid = e.raid, day = e.day, clock = clock, limit = e.limit, lock = e.lock,
         comments = e.comments, srplus = e.srplus, dupes = e.dupes, description = desc,
         name = raidName(e.raid), tpl = e.tpl, hr = e.hr, inc = e.inc, prev = e.prev,
+        skip = e.skip, input = e.input, valid = e.valid,
     })
     if not sent then
         note("Can't reach the lock script. Is Nampower loaded?", UI.RED)

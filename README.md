@@ -531,7 +531,17 @@ the link box, or from the minimap button's menu. It asks for what raidres's own
 - **Hard reserves**: one of your saved HR lists on raidres for that raid, or
   items ticked boss by boss from the raid's loot.
 - **SR+ each event** and **from**: with SR+ on, how much each event adds, and
-  which of your recent lists for the same raid SR+ carries over from.
+  the event SR+ carries over from. The **from** menu offers:
+  - your own earlier events of that raid that had SR+ on, as raidres's form
+    lists them, with their dates and how much each added;
+  - the lists of that raid you've fetched lately, any raidres said had SR+
+    off greyed out;
+  - **Type a code or link...** for any other event. With the DLL it's checked
+    first: it must be the same raid, with SR+ on.
+
+  Picking one copies its SR+ settings too (how much it adds, skipped events,
+  typed-in values, validation), the way raidres's form does. **Event
+  settings** offers the same menu.
 
 **Create event** makes it. The new link goes into the window's box and is
 fetched, and you're asked whether to post it in raid (or party) chat as one

@@ -1452,6 +1452,22 @@ local shown = {}
 for _, info in ipairs(MENU) do
     if info.value ~= "new" and info.value ~= "settings" then table.insert(shown, plain(info.text)) end
 end
+-- what raidres said of each list's SR+ stays with it for "SR+ from"
+RB.NoteEventSr("MC2", { allowSrPlus = false })
+check("raidres's word on SR+ marks the recent list", RaidResBridge_Recent[2].sr, false)
+RB.eventSr.MC9 = true
+mc("MC9")
+check("and a list fetched has it from the start", RaidResBridge_Recent[1].sr, true)
+mc("MC2")
+check("fetched again, it keeps it", RaidResBridge_Recent[1].sr, false)
+RaidResBridge_Recent = nil
+mc("MC1"); mc("MC2")
+RB.RememberList("DEMO42", { metadata = { instance = zg } })
+click(f.recent)
+shown = {}
+for _, info in ipairs(MENU) do
+    if info.value ~= "new" and info.value ~= "settings" then table.insert(shown, plain(info.text)) end
+end
 check("the menu groups them under each raid, the latest raid first", table.concat(shown, " | "),
     "Recent lists | Zul'Gurub | DEMO42  just now | Molten Core | MC2  just now | MC1  just now")
 check("the raid names can't be picked", MENU[2].isTitle, 1)
@@ -1650,8 +1666,71 @@ fire(ev.srplus, "OnClick")
 check("and show with it on", ev.inc:IsShown(), true)
 check("10 a time to start", ev.inc.ddText, "+10")
 pick(entry(openMenu(ev.inc), 20))
+check("SR+ on asks raidres for your SR+ events of this raid", FILES["RaidResBridge_lock_cmd.txt"], "suggest 94")
 local prevMenu = openMenu(ev.prev)
-check("carried from nothing, or one of your lists for this raid", plain(prevMenu[1].text), "Start fresh")
+check("while it asks, the menu says so", plain(prevMenu[3].text), "  asking raidres...")
+FILES["RaidResBridge_lock_result.txt"] = 'ok suggest 94 [' ..
+    '{"ref":"BWL222","start":' .. (CLOCK - 7 * 86400) .. ',"inc":15,"skip":2,"input":false,"valid":true},' ..
+    '{"ref":"BWL111","start":' .. (CLOCK - 14 * 86400) .. ',"inc":0,"skip":0,"input":true,"valid":false}]'
+run(1)
+RaidResBridge_Recent = {
+    { ref = "BWL111", place = "Blackwing Lair" },          -- raidres listed it already
+    { ref = "OFF333", place = "Blackwing Lair", sr = false },
+    { ref = "NEW444", place = "Blackwing Lair" },
+    { ref = "ZG5555", place = "Zul'Gurub" },
+}
+prevMenu = openMenu(ev.prev)
+local prevText = {}
+for _, info in ipairs(prevMenu) do table.insert(prevText, plain(info.text)) end
+check("fresh, raidres's own, the lists fetched here, then any code",
+    table.concat(prevText, " | "),
+    "Start fresh | Your SR+ events of Blackwing Lair on raidres | BWL222  " ..
+    os.date("%a %d %b", CLOCK - 7 * 86400) .. "  +15 | BWL111  " .. os.date("%a %d %b", CLOCK - 14 * 86400) ..
+    "  +0 | Fetched lately | OFF333  SR+ was off | NEW444 | Other | Type a code or link...")
+local offRow
+for _, info in ipairs(prevMenu) do if string.find(plain(info.text), "OFF333", 1, true) then offRow = info end end
+check("one raidres said had SR+ off can't be picked", offRow and offRow.disabled, 1)
+pick(entry(prevMenu, "BWL222"))
+check("picked", ev.prev.ddText, "BWL222")
+check("its SR+ settings come with it, as the site copies them",
+    ev.inc.ddText .. " " .. tostring(RB.eventForm.skip) .. " " .. tostring(RB.eventForm.input) ..
+    " " .. tostring(RB.eventForm.valid), "+15 2 false true")
+check("and it says so", plain(ev.status:GetText()), "SR+ carries on from BWL222, +15 each event, as it had.")
+pick(entry(openMenu(ev.prev), "BWL111"))
+check("one that adds nothing leaves the rest alone", ev.inc.ddText .. " " .. tostring(RB.eventForm.skip), "+15 2")
+pick(entry(openMenu(ev.prev), "type"))
+check("Type a code asks for it", POPUP and POPUP.which, "ZYLLARAIDRES_PREVCODE")
+RB.SetPrevCode("not a code")
+check("a bad one is refused", plain(ev.status:GetText()), "That isn't a raidres code: six letters and digits, or its link.")
+RB.SetPrevCode(" https://raidres.top/res/abc123 ")
+check("a link, without the DLL, is taken as raidres will check it",
+    ev.prev.ddText .. " / " .. plain(ev.status:GetText()),
+    "ABC123 / SR+ carries on from ABC123; raidres checks it when you save.")
+check("and stays on the menu, ticked", entry(openMenu(ev.prev), "ABC123").checked, 1)
+local realHttp, realSettings = RB.Http, RB.HttpEventSettings
+RB.Http = function() return true end
+local answers = {
+    OTHER1 = { ref = "OTHER1", raid = 100, srplus = true, inc = 10 },
+    NOSR22 = { ref = "NOSR22", raid = 94, srplus = false, inc = 0 },
+    GOOD33 = { ref = "GOOD33", raid = 94, srplus = true, inc = 25, skip = 1, input = true, valid = false },
+}
+RB.HttpEventSettings = function(ref, done)
+    if answers[ref] then done(answers[ref]) else done(nil, "raidres has no list " .. ref) end
+end
+RB.SetPrevCode("MISS44")
+check("with the DLL, one raidres hasn't is refused", plain(ev.status:GetText()), "raidres has no list MISS44")
+RB.SetPrevCode("other1")
+check("another raid's is refused", plain(ev.status:GetText()), "OTHER1 is for another raid: SR+ carries on only within one raid.")
+RB.SetPrevCode("NOSR22")
+check("one without SR+ is refused", plain(ev.status:GetText()), "NOSR22 didn't have SR+ on, so there's nothing to carry on from.")
+check("and the pick stays as it was", ev.prev.ddText, "ABC123")
+RB.SetPrevCode("GOOD33")
+check("a good one is taken, its settings too", ev.prev.ddText .. " " .. ev.inc.ddText, "GOOD33 +25")
+RB.Http, RB.HttpEventSettings = realHttp, realSettings
+pick(entry(openMenu(ev.prev), "none"))
+check("Start fresh drops it and what it carried",
+    ev.prev.ddText .. " " .. tostring(RB.eventForm.skip), "Start fresh nil")
+pick(entry(openMenu(ev.inc), 20))
 ev.srplus:SetChecked(nil)
 fire(ev.srplus, "OnClick")
 ev.desc:SetText("BWL night, bring an Onyxia cloak")
@@ -1771,6 +1850,13 @@ check("starting from the list's hard reserves", ev2.hr.ddText,
 check("and raidres's SR+ settings", tostring(ev2.srplus:GetChecked()) .. " " .. ev2.inc.ddText .. " " .. ev2.prev.ddText,
     "1 +15 OLD111")
 check("saved, not created", ev2.create:GetText(), "Save")
+check("with SR+ on, raidres is asked for the raid's SR+ events", FILES[CMD2], "suggest 100")
+FILES[RESULT2] = 'ok suggest 100 [{"ref":"DEMO42","start":1,"inc":15},{"ref":"OLD111","start":1,"inc":15}]'
+run(1)
+local own = {}
+for _, info in ipairs(openMenu(ev2.prev)) do table.insert(own, info.value or "") end
+check("not offering the event itself", string.find(table.concat(own, ","), "DEMO42", 1, true), nil)
+check("its own previous one ticked", entry(openMenu(ev2.prev), "OLD111").checked, 1)
 FILES[CMD2] = nil
 click(ev2.create)
 check("an untouched save leaves the hard reserves alone", FILES[CMD2], "settings DEMO42 srplus=1 inc=15 prev=OLD111")
