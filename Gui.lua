@@ -181,8 +181,11 @@ function RB.Players(snap)
 
     for _, r in ipairs(RB.Roster()) do add(r.name, r.class, true) end
     for _, p in ipairs(data.softreserves or {}) do add(p.name, nil, false) end
-    -- added in this window, to reserve on raidres for them
-    for _, x in pairs(RB.extraPlayers or {}) do add(x.name, x.class, false) end
+    -- added in this window to this list, to reserve on raidres for them
+    local ref = (snap and snap.ref) or (RB.gui and RB.gui.snap and RB.gui.snap.ref)
+    for _, x in pairs(RB.OthersFor(ref)) do
+        if x.added then add(x.name, x.class, false) end
+    end
 
     local limit = RB.Limit()
     if RB.playerSort == "name" then
@@ -372,11 +375,18 @@ function RB.Snapshot()
     end
     for _, h in ipairs(merged.hardreserves or {}) do s.hard[h.id] = true end
 
+    -- On raidres: each player's items, how many copies of each (an item
+    -- can be reserved twice), and whether an officer validated its SR+.
+    s.webCount, s.valid = {}, (ref and RB.srValid and RB.srValid[string.lower(ref)]) or {}
     if fetched then
         for _, p in ipairs(fetched.softreserves or {}) do
-            local set = {}
-            for _, it in ipairs(p.items or {}) do set[it.id] = true end
+            local set, n = {}, 0
+            for _, it in ipairs(p.items or {}) do
+                set[it.id] = (set[it.id] or 0) + 1
+                n = n + 1
+            end
             s.web[key(p.name)] = set
+            s.webCount[key(p.name)] = n
         end
         s.instance = fetched.metadata and fetched.metadata.instance
     end
@@ -653,6 +663,11 @@ function RB.MySignup(s, name)
     return signup
 end
 
+--- How many reserves `k` holds on raidres, every copy counted.
+function RB.WebCount(s, k)
+    return (s and s.webCount and s.webCount[k]) or 0
+end
+
 --- Does a click on loot for `name` go to raidres? Only for you, on a raidres list.
 function RB.ReservesOnRaidres(s, name)
     return s and s.ref and s.ref ~= "manual" and RB.MySignup(s, name) ~= nil
@@ -684,8 +699,7 @@ function RB.ReserveOnRaidres(id, remove, spec)
     local _, token = UnitClass("player")
     local name = RB.ItemInfo(id)
     if not remove then
-        local held = 0
-        for _ in pairs(s.web[k] or {}) do held = held + 1 end
+        local held = RB.WebCount(s, k)
         if held >= RB.Limit() then
             RB.Notice("you have " .. held .. " of " .. RB.Limit() ..
                 " on raidres. Take one back first.")
@@ -782,15 +796,35 @@ end
 -- their row's right-click menu.
 -- ---------------------------------------------------------------------------
 
-RB.forOthers = RB.forOthers or {}       -- key(name) -> their clicks go to raidres
+--[[ Who you reserve for on a list, kept with it (RaidResBridge_ForOthers),
+     so a /reload doesn't quietly send their next clicks to the typed list:
+       [lower(ref)][key(name)] = { name, class, on, added }
+     `on`: their loot clicks go to raidres. `added`: added here by name and
+     class, shown on that list's player list until it's forgotten. Only the
+     lists still on the Recent menu are kept (RB.RememberList). ]]
+function RB.OthersFor(ref)
+    if not ref or ref == "manual" then return {} end
+    RaidResBridge_ForOthers = RaidResBridge_ForOthers or {}
+    local k = string.lower(ref)
+    RaidResBridge_ForOthers[k] = RaidResBridge_ForOthers[k] or {}
+    return RaidResBridge_ForOthers[k]
+end
 
---[[ A player's class token: whoever was added here, else the spec kept for
-     them last time -- raidres names a spec after its class, "WarriorFury" --
-     else the raid's roster. ]]
-function RB.ClassOf(name)
+local function currentRef() return RB.gui and RB.gui.snap and RB.gui.snap.ref end
+
+-- Is `name` ticked on this list: their loot clicks go to raidres?
+function RB.ForOther(ref, name)
+    local x = name and RB.OthersFor(ref)[key(name)]
+    return x and x.on and true or false
+end
+
+--[[ A player's class token: whoever was added to this list, else the spec
+     kept for them last time -- raidres names a spec after its class,
+     "WarriorFury" -- else the raid's roster. ]]
+function RB.ClassOf(name, ref)
     local k = key(name)
-    local x = RB.extraPlayers and RB.extraPlayers[k]
-    if x then return x.class end
+    local x = RB.OthersFor(ref or currentRef())[k]
+    if x and x.class then return x.class end
     local spec = RaidResBridge_Spec and RaidResBridge_Spec[k]
     if spec then
         for token, list in pairs(SPECS) do
@@ -806,7 +840,7 @@ function RB.ClassOf(name)
 end
 
 function RB.ReservesForOther(s, name)
-    return name and RB.forOthers[key(name)] and s and RB.MySignup(s, name) == nil
+    return name and s and RB.ForOther(s.ref, name) and RB.MySignup(s, name) == nil
         and s.ref and s.ref ~= "manual"
         and RB.LockControlReady and RB.LockControlReady() and true or false
 end
@@ -833,8 +867,7 @@ function RB.ReserveForOther(id, remove, spec)
             RB.Notice("their class isn't known here: add them from a player's right-click menu.")
             return
         end
-        local held = 0
-        for _ in pairs(s.web[key(who)] or {}) do held = held + 1 end
+        local held = RB.WebCount(s, key(who))
         if held >= RB.Limit() then
             RB.Notice(who .. " has " .. held .. " of " .. RB.Limit() .. " on raidres. Take one back first.")
             return
@@ -876,9 +909,13 @@ local function onPickPlayerMenu()
     if this.value == "add" then
         RB.AskAddPlayer()
     elseif this.value == "toggle" and p then
+        local list = RB.OthersFor(currentRef())
         local k = key(p.name)
-        RB.forOthers[k] = not RB.forOthers[k] or nil
-        if RB.forOthers[k] then RB.player = p.name end
+        local x = list[k] or { name = p.name }
+        x.on = not x.on or nil
+        -- one not added here and no longer ticked has nothing left to keep
+        if x.on or x.added then list[k] = x else list[k] = nil end
+        if x.on then RB.player = p.name end
         RB.Draw()
     end
 end
@@ -896,7 +933,7 @@ function RB.InitPlayerMenu()
         info = {}
         info.value = "toggle"
         info.func = onPickPlayerMenu
-        info.checked = RB.forOthers[key(p.name)] and 1 or nil
+        info.checked = RB.ForOther(s.ref, p.name) and 1 or nil
         if not RB.ClassOf(p.name) then
             info.text = "Reserve on raidres for them (class unknown)"
             info.disabled = 1
@@ -920,7 +957,7 @@ function RB.AskAddPlayer()
             button1 = "Next",
             button2 = "Cancel",
             hasEditBox = 1,
-            maxLetters = 12,
+            maxLetters = 48,    -- bytes: twelve letters with accents are more than 12
             OnAccept = function()
                 local box = getglobal(this:GetParent():GetName() .. "EditBox")
                 RB.AddPlayerNamed(box and box:GetText())
@@ -940,9 +977,7 @@ local function onPickAddClass()
     local name = RB.addingName
     if not name or not this.value then return end
     RB.addingName = nil
-    RB.extraPlayers = RB.extraPlayers or {}
-    RB.extraPlayers[key(name)] = { name = name, class = this.value }
-    RB.forOthers[key(name)] = true
+    RB.OthersFor(currentRef())[key(name)] = { name = name, class = this.value, on = true, added = true }
     RB.player = name
     RB.Refresh()
     -- a different class makes the spec kept for them meaningless
@@ -955,8 +990,10 @@ end
 
 function RB.AddPlayerNamed(text)
     local name = string.gsub(text or "", "%s", "")
-    -- a character name as the game allows it: letters, 2 to 12
-    if string.len(name) < 2 or string.len(name) > 12 or string.find(name, "[%p%d]") then
+    -- a character name as the game allows it: letters, 2 to 12 -- counted
+    -- as letters, since one with an accent is two bytes of UTF-8
+    local _, letters = string.gsub(name, "[^\128-\191]", "")
+    if letters < 2 or letters > 12 or string.find(name, "[%p%d]") then
         RB.Notice("that isn't a character name.")
         return
     end
@@ -1137,15 +1174,18 @@ function RB.ItemTooltip(owner, id)
             for _, it in ipairs(s.items[k] or {}) do
                 if it.id == id then mine = true end
             end
+            -- what a click does (RB.ClickItem): raidres as you, raidres for
+            -- them, or the typed list -- and so whose count says "full"
             local onRaidres = RB.ReservesOnRaidres(s, who)
+            local forOther = not onRaidres and RB.ReservesForOther(s, who)
             local held = table.getn(s.items[k] or {})
-            if onRaidres then
-                held = 0
-                for _ in pairs(s.web[k] or {}) do held = held + 1 end
-            end
-            if mine and s.web[k] and s.web[k][id] then
+            if onRaidres or forOther then held = RB.WebCount(s, k) end
+            local typedHere = s.typed[k] and s.typed[k][id]
+            if mine and s.web[k] and s.web[k][id] and not typedHere then
                 if onRaidres then
                     GameTooltip:AddLine("Click: take it back on raidres", 0.13, 1, 0.13)
+                elseif forOther then
+                    GameTooltip:AddLine("Click: take it back on raidres for " .. who, 0.13, 1, 0.13)
                 else
                     addGrey(who .. " reserved this on raidres.")
                 end
@@ -1153,10 +1193,13 @@ function RB.ItemTooltip(owner, id)
                 GameTooltip:AddLine("Click: take it back from " .. who, 0.13, 1, 0.13)
             elseif not s.hard[id] then
                 if held >= RB.Limit() then
-                    GameTooltip:AddLine(who .. " is full.", 1, 0.82, 0)
+                    GameTooltip:AddLine(who .. " is full" .. ((onRaidres or forOther) and " on raidres." or "."),
+                        1, 0.82, 0)
                 elseif onRaidres then
                     GameTooltip:AddLine("Click: reserve it on raidres as " .. RB.MySignup(s),
                         0.13, 1, 0.13)
+                elseif forOther then
+                    GameTooltip:AddLine("Click: reserve it on raidres for " .. who, 0.13, 1, 0.13)
                 else
                     GameTooltip:AddLine("Click: reserve for " .. who, 0.13, 1, 0.13)
                 end
@@ -1204,7 +1247,7 @@ function RB.PlayerTooltip(row)
     addGrey(RB.player and key(RB.player) == k and "Click to let go" or "Click to select")
     if s.ref and s.ref ~= "manual" and RB.LockControlReady and RB.LockControlReady()
             and RB.MySignup(s, p.name) == nil then
-        addGrey(RB.forOthers[k] and "Their loot clicks go to raidres. Right-click to stop."
+        addGrey(RB.ForOther(s.ref, p.name) and "Their loot clicks go to raidres. Right-click to stop."
             or "Right-click: reserve on raidres for them")
     end
     GameTooltip:Show()
@@ -1490,10 +1533,19 @@ local function buildPlayers(f)
         end)
         row:SetScript("OnEnter", function()
             RB.ItemTooltip(this, this.itemId)
+            if this.itemId and this.web and RB.eventSr and RB.gui.snap
+                    and RB.eventSr[RB.gui.snap.ref or ""] then
+                GameTooltip:AddLine("SR+ " .. (this.srPlus or 0) ..
+                    (this.valid and ", validated" or ", not validated"),
+                    this.valid and 0.13 or 1, this.valid and 1 or 0.82, this.valid and 0.13 or 0)
+            end
+            if this.itemId and this.copies and this.copies > 1 then
+                GameTooltip:AddLine("Reserved " .. this.copies .. " times", 1, 1, 1)
+            end
             if this.itemId and this.web and RB.CanEditSrPlus() then
                 GameTooltip:AddLine("Right-click: change its SR+", 0.5, 0.5, 0.5)
-                GameTooltip:Show()
             end
+            GameTooltip:Show()
         end)
         row:SetScript("OnLeave", function() GameTooltip:Hide() end)
         f.dRows[i] = row
@@ -2253,7 +2305,9 @@ function RB.LockRightClick()
         RB.Notice("enable lock control first: /rrb lockcontrol on")
         return
     end
-    if RB.SendOpenCommand(ref) then
+    if RB.HelperBusy() then
+        RB.Notice("still waiting on raidres for the last one.")
+    elseif RB.SendOpenCommand(ref) then
         RB.Notice("opening in Chrome...")
     else
         RB.Notice("can't reach the helper script. Is Nampower loaded?")
@@ -2607,13 +2661,11 @@ function RB.DrawHint()
     elseif s and s.inRaid and s.absent[key(RB.player)] and next(s.free) ~= nil then
         line = RB.player .. " isn't in your raid. If they're here under another name, press Match."
     elseif RB.ReservesForOther(s, RB.player) then
-        local held = 0
-        for _ in pairs(s.web[key(RB.player)] or {}) do held = held + 1 end
+        local held = RB.WebCount(s, key(RB.player))
         line = "On raidres for " .. RB.player .. " (" .. math.max(RB.Limit() - held, 0) ..
             " left), filed under your account: only you and the list's admins can change it."
     elseif RB.ReservesOnRaidres(s, RB.player) then
-        local held = 0
-        for _ in pairs(s.web[key(RB.player)] or {}) do held = held + 1 end
+        local held = RB.WebCount(s, key(RB.player))
         local limit = RB.Limit()
         if held >= limit then
             line = "You're full on raidres. Click one of yours to take it back there."
@@ -2724,25 +2776,39 @@ local function drawDetail(f, s, sel)
     local web = s.web[k] or {}
     -- yours, with the lock helper: raidres's rows can be taken back from here
     local onRaidres = RB.ReservesOnRaidres(s, RB.player) or RB.ReservesForOther(s, RB.player)
-    local shown = n
-    if n > D_ROWS then shown = D_ROWS - 1 end
+    -- one row an item: two copies of it show as one row, x2, and the X
+    -- takes back one copy, so the count is seen to drop
+    local distinct, copies = {}, {}
+    for _, it in ipairs(items) do
+        if not copies[it.id] then table.insert(distinct, it) end
+        copies[it.id] = (copies[it.id] or 0) + 1
+    end
+    local valid = s.valid[k] or {}
+    local rowsNeeded = table.getn(distinct)
+    local shown = rowsNeeded
+    if rowsNeeded > D_ROWS then shown = D_ROWS - 1 end
     for i = 1, shown do
-        local it = items[i]
+        local it = distinct[i]
         local row = f.dRows[i]
         local name, q, icon = RB.ItemInfo(it.id)
         row.itemId = it.id
         row.icon:SetTexture(icon or QMARK)
         row.icon:Show()
-        -- SR+ beside it, as raidres's own list badges it
+        -- SR+ beside it, as raidres's own list badges it: green once an
+        -- officer has validated it, gold until then
         local plus = tonumber(it.sr_plus) or 0
-        row.text:SetText(hex(qualityHex(q), name) .. (plus > 0 and hex(GOLD, "  +" .. plus) or ""))
+        local many = copies[it.id]
+        row.text:SetText(hex(qualityHex(q), name) .. (many > 1 and hex(WHITE, " x" .. many) or "") ..
+            (plus > 0 and hex(valid[it.id] and GREEN or GOLD, "  +" .. plus) or ""))
         row.onRaidres = (web[it.id] and onRaidres) and true or nil
-        row.web, row.srPlus = web[it.id] and true or nil, plus
+        row.web, row.srPlus, row.valid = web[it.id] and true or nil, plus, valid[it.id]
+        row.copies = many
         if row.onRaidres then
             row.tag:Hide()
             row.mine:Show()
             row.remove:Show()
-            row.remove.tipBody = "Take it back on raidres. The list is fetched again after."
+            row.remove.tipBody = (many > 1 and ("Take back one of the " .. many .. " copies on raidres.")
+                or "Take it back on raidres.") .. " The list is fetched again after."
         elseif web[it.id] then
             row.tag:Show()
             row.mine:Hide()
@@ -2755,11 +2821,11 @@ local function drawDetail(f, s, sel)
         end
         row:Show()
     end
-    if n > D_ROWS then
+    if rowsNeeded > D_ROWS then
         local row = f.dRows[D_ROWS]
         row.itemId, row.onRaidres = nil, nil
         row.icon:Hide()
-        row.text:SetText(hex(GREY, "+" .. (n - shown) .. " more (hover their name)"))
+        row.text:SetText(hex(GREY, "+" .. (rowsNeeded - shown) .. " more (hover their name)"))
         row.tag:Hide()
         row.mine:Hide()
         row.remove:Hide()
@@ -2945,7 +3011,9 @@ function RB.OpenSrPlusMenu(id)
     for _, it in ipairs(s.items[key(RB.player)] or {}) do
         if it.id == id then now = tonumber(it.sr_plus) or 0 end
     end
-    RB.srTarget = { ref = s.ref, item = id, name = (m and m.signup) or RB.player, now = now }
+    local valid = (s.valid[key(RB.player)] or {})[id] and true or false
+    RB.srTarget = { ref = s.ref, item = id, name = (m and m.signup) or RB.player, now = now,
+                    valid = valid, known = s.valid ~= nil and RB.srValid and RB.srValid[string.lower(s.ref)] ~= nil }
     ToggleDropDownMenu(1, nil, RB.gui.srMenu, "cursor")
 end
 
@@ -2986,12 +3054,14 @@ function RB.InitSrPlusMenu()
     info.isTitle = 1
     UIDropDownMenu_AddButton(info)
     local rows = { { "Set SR+... (now +" .. t.now .. ")", "set" },
-                   { "Mark validated", "valid" }, { "Mark not validated", "invalid" } }
+                   { "Validated", "valid", t.known and t.valid },
+                   { "Not validated", "invalid", t.known and not t.valid } }
     for i = 1, table.getn(rows) do
         info = {}
         info.text = rows[i][1]
         info.value = rows[i][2]
         info.func = onPickSrPlus
+        info.checked = rows[i][3] and 1 or nil
         UIDropDownMenu_AddButton(info)
     end
 end

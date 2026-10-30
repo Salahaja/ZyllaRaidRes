@@ -195,8 +195,22 @@ do
     checkSame("the counts match the watcher's", stats, Expected_Stats)
 
     -- an SR+ event: raidres sends {id, value, isValid}; RollFor wants the number
-    local sr = RB.Convert("SRPLUS", RB.Json.decode(slurp("event_SRPLUS.json")), raid)
+    local srEvent = RB.Json.decode(slurp("event_SRPLUS.json"))
+    local sr = RB.Convert("SRPLUS", srEvent, raid)
     checkSame("an SR+ list matches the watcher's", sr, Expected_SrPlus)
+    -- which SR+ an officer validated, kept beside the list, not in it
+    RB.NoteSrValid("SRPLUS", srEvent, raid)
+    local gameOf = {}
+    for _, it in ipairs(raid.raidItems) do gameOf[it.id] = it.gameDbItemId end
+    local v = RB.srValid.srplus
+    check("a validated one is marked", v.aldwyn[gameOf[6570]], true)
+    check("one not validated isn't", v.aldwyn[gameOf[6597]], nil)
+    check("one without SR+ isn't", v.brisa[gameOf[6557]], nil)
+    check("and none of it goes into what RollFor gets", sr.softreserves[1].items[1].sr_valid, nil)
+    table.insert(srEvent.reservations, { id = 999, raidItemId = 6570, character = { name = "Aldwyn" },
+        srPlus = { id = 999, value = 10, isValid = false } })
+    RB.NoteSrValid("SRPLUS", srEvent, raid)
+    check("two copies count as validated only when both are", RB.srValid.srplus.aldwyn[gameOf[6570]], nil)
     local values = {}
     for _, p in ipairs(sr.softreserves) do
         for _, it in ipairs(p.items) do

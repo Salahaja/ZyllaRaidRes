@@ -5,7 +5,7 @@
 ## Version: 1.5.0
 ## X-Website: https://github.com/Salahaja/ZyllaRaidRes
 ## OptionalDeps: RollFor, pfUI
-## SavedVariables: RaidResBridge_Manual, RaidResBridge_Limit, RaidResBridge_Names, RaidResBridge_LockControl, RaidResBridge_Options, RaidResBridge_Recent, RaidResBridge_Spec, RaidResBridge_NewEvent
+## SavedVariables: RaidResBridge_Manual, RaidResBridge_Limit, RaidResBridge_Names, RaidResBridge_LockControl, RaidResBridge_Options, RaidResBridge_Recent, RaidResBridge_Spec, RaidResBridge_NewEvent, RaidResBridge_ForOthers
 ## SavedVariablesPerCharacter: RaidResBridge_Sent
 
 RaidResBridge.lua

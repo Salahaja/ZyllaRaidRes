@@ -302,6 +302,17 @@ try:
             "body": held_row}])
     answer, sent = run(args(FREE, "Aldwyn", remove=True), event=OPEN)
     check("one not held is refused", answer["message"], "Aldwyn hasn't reserved that on raidres")
+    two_copies = copy.deepcopy(OPEN)
+    first = next(r for r in two_copies["reservations"]
+                 if r["user"]["id"] == "1000" and r["raidItemId"] == ALDWYN_ITEMS[0])
+    first["srPlus"] = {"id": 1, "value": 30, "isValid": False}
+    second = copy.deepcopy(first) | {"id": 888, "srPlus": {"id": 2, "value": 10, "isValid": False}}
+    two_copies["reservations"].append(second)
+    answer, sent = run(args(HELD, "Aldwyn", remove=True), event=two_copies)
+    check("of two copies, the one with less SR+ goes", sent[0]["url"], "/api/raid-event-reservations/888")
+    second["srPlus"] = {"id": 2, "value": 30, "isValid": False}
+    answer, sent = run(args(HELD, "Aldwyn", remove=True), event=two_copies)
+    check("alike, the later one", sent[0]["url"], "/api/raid-event-reservations/888")
     answer, sent = run(args(HELD, "Aldwyn", remove=True), me="9999", event=OPEN)
     check("nor someone else's", answer["message"], "Aldwyn hasn't reserved that on raidres")
     check("and nothing is sent for them", sent, [])
@@ -366,6 +377,27 @@ try:
     check("the picked HR, and the site's note kept",
           [(h["raidItemId"], h["isHardReserved"], h["note"]) for h in sent[0]["body"]["advancedHrItems"]],
           [(two[0]["id"], True, None), (two[1]["id"], False, "MS > OS")])
+    third = RAID["raidItems"][9]
+    sited = copy.deepcopy(OPEN) | {"isAuthor": True, "advancedHrItems": [
+        {"id": 51, "raidItemId": two[0]["id"], "isHardReserved": True, "note": "tanks first",
+         "characterClasses": ["Warrior"], "characterSpecializations": ["WarriorProtection"],
+         "characterNames": ["Aldwyn"]},
+        {"id": 52, "raidItemId": two[1]["id"], "isHardReserved": False, "note": None,
+         "characterClasses": ["Priest"], "characterSpecializations": [], "characterNames": []},
+        {"id": 53, "raidItemId": third["id"], "isHardReserved": False, "note": "OS only",
+         "characterClasses": [], "characterSpecializations": [], "characterNames": []}]}
+    answer, sent = run({"ref": "DEMO42", "hr": [two[0]["gameDbItemId"], third["gameDbItemId"]], "sr": False},
+                       script=w._SETTINGS_JS, event=sited, reply={"status": 200, "body": {}})
+    hr = {h["raidItemId"]: h for h in sent[0]["body"]["advancedHrItems"]}
+    check("one that stays HR keeps the site's class, spec and name limits and note",
+          (hr[two[0]["id"]]["isHardReserved"], hr[two[0]["id"]]["note"], hr[two[0]["id"]]["characterClasses"],
+           hr[two[0]["id"]]["characterSpecializations"], hr[two[0]["id"]]["characterNames"]),
+          (True, "tanks first", ["Warrior"], ["WarriorProtection"], ["Aldwyn"]))
+    check("one with only limits, no note, is kept as it was", (hr[two[1]["id"]]["isHardReserved"],
+          hr[two[1]["id"]]["characterClasses"]), (False, ["Priest"]))
+    check("one with a note made HR keeps its note", (hr[third["id"]]["isHardReserved"], hr[third["id"]]["note"]),
+          (True, "OS only"))
+    check("without the site's own row ids", any("id" in h for h in hr.values()), False)
     answer, sent = run({"ref": "DEMO42", "sr": False}, script=w._SETTINGS_JS, event=mine,
                        reply={"status": 200, "body": {}})
     check("SR+ off alone touches nothing else", sent[0]["body"], {"reference": "DEMO42", "allowSrPlus": False})
@@ -376,6 +408,16 @@ try:
                        event=copy.deepcopy(OPEN) | {"isAuthor": False})
     check("someone else's list is refused before sending", (answer.get("message"), sent),
           ("that list isn't yours to change", []))
+
+    print("the game's ids, echoed")
+    check("an id comes off the command", w.split_tag("#1795222800123 lock DEMO42"),
+          ("1795222800123", "lock DEMO42"))
+    check("a command without one is as it was", w.split_tag("lock DEMO42"), (None, "lock DEMO42"))
+    check("the answer carries it back", w.tag_result("42", "ok saved"), "#42 ok saved")
+    check("or not, for a command without one", w.tag_result(None, "ok saved"), "ok saved")
+    tag, line = w.split_tag("#7 frobnicate DEMO42")
+    check("even a bad command's answer is tagged", w.tag_result(tag, w.run_command(line)),
+          "#7 error: bad command")
 
     print("the events SR+ can carry on from")
     # as raidres answered for Molten Core on 2026-10-30
@@ -422,6 +464,13 @@ try:
     check("that one changed", got[target["id"]][0], 35)
     check("the others kept as they were", got[sr["reservations"][0]["id"]],
           (35, True) if sr["reservations"][0]["id"] == target["id"] else (20, True))
+    dup = copy.deepcopy(sr)
+    copy2 = copy.deepcopy(target) | {"id": 999, "srPlus": None}
+    dup["reservations"].append(copy2)
+    answer, sent = run({"ref": "DEMO42", "item": tg, "name": "Aldwyn", "value": 40},
+                       script=w._SRPLUS_JS, event=dup, reply={"status": 200, "body": {}})
+    got = {x["reservationId"]: x["value"] for x in sent[0]["body"]["reservations"]}
+    check("both copies of an item get it, as raidres keeps them alike", (got[target["id"]], got[999]), (40, 40))
     answer, sent = run({"ref": "DEMO42", "item": tg, "name": "Aldwyn", "valid": True},
                        script=w._SRPLUS_JS, event=sr, reply={"status": 200, "body": {}})
     got = {x["reservationId"]: (x["value"], x["isValid"]) for x in sent[0]["body"]["reservations"]}

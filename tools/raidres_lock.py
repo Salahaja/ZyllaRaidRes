@@ -514,7 +514,10 @@ async (a) => {
   }
 
   if (a.remove) {
-    const row = held.filter(r => ids.includes(r.raidItemId)).pop();
+    // of two copies, the one with the least SR+ goes (the later one, if alike)
+    const sp = r => (r.srPlus && Number(r.srPlus.value)) || 0;
+    const row = held.filter(r => ids.includes(r.raidItemId))
+      .reduce((low, r) => (low && sp(low) < sp(r)) ? low : r, null);
     if (!row) return answer({ result: 'error', message: a.name + " hasn't reserved that on raidres" });
     if (a.dry) return answer({ result: 'plan', method: 'DELETE', id: row.id });
     return (await send('/api/raid-event-reservations/' + row.id, 'DELETE', row.id)).fail
@@ -887,16 +890,27 @@ async (a) => {
   } else if (a.hr) {
     const raid = await get('/raids/raid_' + e.raidId + '.json');
     if (!raid.ok || !raid.body) return answer({ result: 'error', message: "couldn't load the raid's loot table" });
-    // notes on items that aren't hard reserves are kept as they are
-    const kept = (e.advancedHrItems || []).filter(i => !i.isHardReserved && i.note);
+    // What the site set stays as it set it: an item that stays a hard
+    // reserve keeps its class, spec and name limits and its note; one that
+    // only had a note or limits becomes a hard reserve with them; every
+    // other entry that isn't a hard reserve is left as it is. Only the
+    // fields the form itself sends go back.
+    const before = e.advancedHrItems || [];
+    const entry = i => ({ raidItemId: i.raidItemId, isHardReserved: !!i.isHardReserved,
+      note: i.note == null ? null : i.note,
+      characterClasses: i.characterClasses || [], characterSpecializations: i.characterSpecializations || [],
+      characterNames: i.characterNames || [] });
     const items = [];
     for (const g of a.hr) {
       const it = (raid.body.raidItems || []).find(i => i.gameDbItemId === g);
       if (!it) return answer({ result: 'error', message: 'item ' + g + " isn't in this raid's loot on raidres" });
-      items.push({ raidItemId: it.id, isHardReserved: true, note: null,
-                   characterClasses: [], characterSpecializations: [], characterNames: [] });
+      const had = before.find(i => i.raidItemId === it.id);
+      items.push(had ? Object.assign(entry(had), { isHardReserved: true })
+        : { raidItemId: it.id, isHardReserved: true, note: null,
+            characterClasses: [], characterSpecializations: [], characterNames: [] });
     }
-    body.advancedHrItems = items.concat(kept.filter(k => !items.some(i => i.raidItemId === k.raidItemId)));
+    const kept = before.filter(i => !i.isHardReserved && !items.some(x => x.raidItemId === i.raidItemId));
+    body.advancedHrItems = items.concat(kept.map(entry));
   }
   if (a.sr != null) {
     body.allowSrPlus = a.sr;
@@ -981,15 +995,19 @@ async (a) => {
   if (!raid.ok || !raid.body) return answer({ result: 'error', message: "couldn't load the raid's loot table" });
   const ids = (raid.body.raidItems || []).filter(i => i.gameDbItemId === a.item).map(i => i.id);
   const name = a.name.toLocaleLowerCase();
-  const row = (e.reservations || []).find(r => r.character
+  // Every copy of the item: raidres gives a duplicate reserve the same SR+
+  // as the first, so the copies are changed together.
+  const rows = (e.reservations || []).filter(r => r.character
     && String(r.character.name).toLocaleLowerCase() === name && ids.includes(r.raidItemId));
-  if (!row) return answer({ result: 'error', message: a.name + " hasn't reserved that on raidres" });
+  if (rows.length === 0) return answer({ result: 'error', message: a.name + " hasn't reserved that on raidres" });
+  // Every reservation, as raidres's own "Update SR+" sends them.
   const list = (e.reservations || []).map(r => ({ reservationId: r.id,
     isValid: !!(r.srPlus && r.srPlus.isValid),
     value: (r.srPlus && Number(r.srPlus.value) > 0) ? Number(r.srPlus.value) : 0 }));
-  const mine = list.find(x => x.reservationId === row.id);
-  if (a.value != null) mine.value = a.value;
-  if (a.valid != null) mine.isValid = a.valid;
+  for (const mine of list.filter(x => rows.some(r => r.id === x.reservationId))) {
+    if (a.value != null) mine.value = a.value;
+    if (a.valid != null) mine.isValid = a.valid;
+  }
   const body = { reference: e.reference, reservations: list };
   if (a.dry) return answer({ result: 'plan', method: 'PUT', body });
   const r = await send('/api/events/' + encodeURIComponent(e.reference) + '/sr-plus', 'PUT', body);
@@ -1092,6 +1110,92 @@ def still_running(pid):
         return lambda: not gone
     return lambda: k32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
 
+# Each command from the game may start "#ID ": the answer starts with the
+# same, so the game can tell a late answer to a command it gave up on from
+# the answer to the one it is waiting for.
+_TAG_RE = re.compile(r"^#(\d{1,20}) (.*)$", re.S)
+
+def split_tag(line):
+    m = _TAG_RE.match(line)
+    return (m.group(1), m.group(2).strip()) if m else (None, line)
+
+def tag_result(tag, result):
+    return ("#%s %s" % (tag, result)) if tag else result
+
+def run_command(line):
+    """One command line from the game, done; the line to answer with."""
+    words = line.split()
+    if words and words[0] == "srplus":
+        log("%s ..." % line)
+        result = set_srplus(words[1:])
+        log("  -> %s" % result)
+        return result
+
+    if words and words[0] == "settings":
+        log("%s ..." % line)
+        result = event_settings(words[1:])
+        log("  -> %s" % result)
+        return result
+
+    if words and words[0] == "suggest":
+        result = suggest(words[1:])
+        log("suggest -> %s" % result[:80])
+        return result
+
+    if words == ["templates"]:
+        result = templates()
+        log("templates -> %s" % result[:80])
+        return result
+
+    # create RAIDID DAY TIME LIMIT LOCK COMMENTS SRPLUS DUPES [DESCRIPTION]
+    if words and words[0] == "create":
+        log("create %s ..." % " ".join(words[1:4]))
+        result = create_event(words[1:])
+        log("  -> %s" % result)
+        return result
+
+    # reserve REF ITEM NAME CLASS [SPEC]  /  unreserve REF ITEM NAME
+    # reserve-for REF ITEM NAME CLASS SPEC  /  unreserve-for REF ITEM NAME:
+    # the same for another player, as an admin (spec required)
+    if words and words[0] in ("reserve", "unreserve", "reserve-for", "unreserve-for"):
+        for_other = words[0].endswith("-for")
+        remove = words[0].startswith("unreserve")
+        sizes = (4,) if remove else ((6,) if for_other else (5, 6))
+        if len(words) not in sizes:
+            result = "error: bad command"
+        else:
+            log("%s ..." % line)
+            result = reserve(words[1], words[2], words[3],
+                             None if remove else words[4],
+                             words[5] if len(words) == 6 else None, remove=remove,
+                             for_other=for_other)
+        log("  -> %s" % result)
+        return result
+
+    parts = line.split(None, 1)
+    if len(parts) == 1 and parts[0] == "restart":
+        log("restart requested")
+        kill_chrome()
+        log("Chrome stopped. Will start fresh on next command.")
+        return "ok restarted"
+
+    if len(parts) != 2 or parts[0] not in ("lock", "unlock", "open", "signin"):
+        log("bad command: %r" % line)
+        return "error: bad command"
+
+    action, ref = parts
+    log("%s %s ..." % (action, ref))
+
+    if action == "signin":
+        result = signin(ref)
+    elif action == "open":
+        result = open_event(ref)
+    else:
+        result = lock_unlock(ref, action == "lock")
+    log("  -> %s" % result)
+
+    return result
+
 def watch(parent=None):
     cd = find_customdata()
     if not cd:
@@ -1118,6 +1222,7 @@ def watch(parent=None):
     log("press Ctrl+C to stop")
 
     while True:
+        tag = None
         try:
             # The game started this and has gone: go with it, and take the
             # Chrome this started too. One left running would answer the next
@@ -1134,94 +1239,12 @@ def watch(parent=None):
                     line = f.read().strip()
                 os.remove(cmd_path)
 
-                words = line.split()
-                if words and words[0] == "srplus":
-                    log("%s ..." % line)
-                    result = set_srplus(words[1:])
-                    log("  -> %s" % result)
-                    with open(result_path, "w", encoding="utf-8") as f:
-                        f.write(result)
-                    continue
-
-                if words and words[0] == "settings":
-                    log("%s ..." % line)
-                    result = event_settings(words[1:])
-                    log("  -> %s" % result)
-                    with open(result_path, "w", encoding="utf-8") as f:
-                        f.write(result)
-                    continue
-
-                if words and words[0] == "suggest":
-                    result = suggest(words[1:])
-                    log("suggest -> %s" % result[:80])
-                    with open(result_path, "w", encoding="utf-8") as f:
-                        f.write(result)
-                    continue
-
-                if words == ["templates"]:
-                    result = templates()
-                    log("templates -> %s" % result[:80])
-                    with open(result_path, "w", encoding="utf-8") as f:
-                        f.write(result)
-                    continue
-
-                # create RAIDID DAY TIME LIMIT LOCK COMMENTS SRPLUS DUPES [DESCRIPTION]
-                if words and words[0] == "create":
-                    log("create %s ..." % " ".join(words[1:4]))
-                    result = create_event(words[1:])
-                    log("  -> %s" % result)
-                    with open(result_path, "w", encoding="utf-8") as f:
-                        f.write(result)
-                    continue
-
-                # reserve REF ITEM NAME CLASS [SPEC]  /  unreserve REF ITEM NAME
-                # reserve-for REF ITEM NAME CLASS SPEC  /  unreserve-for REF ITEM NAME:
-                # the same for another player, as an admin (spec required)
-                if words and words[0] in ("reserve", "unreserve", "reserve-for", "unreserve-for"):
-                    for_other = words[0].endswith("-for")
-                    remove = words[0].startswith("unreserve")
-                    sizes = (4,) if remove else ((6,) if for_other else (5, 6))
-                    if len(words) not in sizes:
-                        result = "error: bad command"
-                    else:
-                        log("%s ..." % line)
-                        result = reserve(words[1], words[2], words[3],
-                                         None if remove else words[4],
-                                         words[5] if len(words) == 6 else None, remove=remove,
-                                         for_other=for_other)
-                    log("  -> %s" % result)
-                    with open(result_path, "w", encoding="utf-8") as f:
-                        f.write(result)
-                    continue
-
-                parts = line.split(None, 1)
-                if len(parts) == 1 and parts[0] == "restart":
-                    log("restart requested")
-                    kill_chrome()
-                    log("Chrome stopped. Will start fresh on next command.")
-                    with open(result_path, "w") as f:
-                        f.write("ok restarted")
-                    continue
-
-                if len(parts) != 2 or parts[0] not in ("lock", "unlock", "open", "signin"):
-                    log("bad command: %r" % line)
-                    with open(result_path, "w") as f:
-                        f.write("error: bad command")
-                    continue
-
-                action, ref = parts
-                log("%s %s ..." % (action, ref))
-
-                if action == "signin":
-                    result = signin(ref)
-                elif action == "open":
-                    result = open_event(ref)
-                else:
-                    result = lock_unlock(ref, action == "lock")
-                log("  -> %s" % result)
-
-                with open(result_path, "w") as f:
-                    f.write(result)
+                tag, line = split_tag(line)
+                result = run_command(line)
+                # UTF-8 both ways; the game's id goes back on the answer, so a
+                # late one is never taken for the next command's
+                with open(result_path, "w", encoding="utf-8") as f:
+                    f.write(tag_result(tag, result))
 
             time.sleep(0.5)
 
@@ -1234,8 +1257,8 @@ def watch(parent=None):
         except Exception as e:
             log("error: %s" % e)
             try:
-                with open(result_path, "w") as f:
-                    f.write("error: %s" % e)
+                with open(result_path, "w", encoding="utf-8") as f:
+                    f.write(tag_result(tag, "error: %s" % e))
             except Exception:
                 pass
             time.sleep(2)

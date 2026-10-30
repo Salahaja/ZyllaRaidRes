@@ -242,6 +242,12 @@ function RB.RememberList(ref, data)
     end
     list[1].sr = sr
     RaidResBridge_Recent = list
+    -- who you reserve for is kept only for the lists still listed here
+    local kept = {}
+    for _, r in ipairs(list) do kept[string.lower(r.ref)] = true end
+    for k in pairs(RaidResBridge_ForOthers or {}) do
+        if not kept[k] then RaidResBridge_ForOthers[k] = nil end
+    end
 end
 
 function RB.Describe(data)
@@ -410,8 +416,7 @@ SlashCmdList["RAIDRESBRIDGE"] = function(msg)
             say("can't reach the helper script (no file API).")
             return
         end
-        pcall(WriteCustomFile, "RaidResBridge_lock_result.txt", "", "w")
-        local ok = pcall(WriteCustomFile, "RaidResBridge_lock_cmd.txt", "restart", "w")
+        local ok = RB.PostHelperCommand("restart")
         if ok then
             RB.sessionExpired = nil
             say("restart sent to the helper script.")

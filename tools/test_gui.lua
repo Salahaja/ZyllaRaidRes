@@ -270,8 +270,26 @@ local function world(withoutNames)
         if r then return r[1], 0, 1, 60, r[2], r[2], r[3], r[4] ~= false end
     end
     GetNumPartyMembers = function() return 0 end
-    WriteCustomFile = function(n, t) FILES[n] = t end
-    ReadCustomFile = function(n) return FILES[n] end
+    -- The helper's side of its two files, as the watcher does it: the game's
+    -- "#ID " comes off the command (FILES holds the command itself, RAWCMD
+    -- what was written) and goes back on whatever answer a test leaves.
+    TAG = nil
+    WriteCustomFile = function(n, t)
+        if n == "RaidResBridge_lock_cmd.txt" then
+            RAWCMD = t
+            local _, _, id, rest = string.find(t, "^#(%d+) (.*)$")
+            if id then TAG, t = id, rest end
+        end
+        FILES[n] = t
+    end
+    ReadCustomFile = function(n)
+        local t = FILES[n]
+        if n == "RaidResBridge_lock_result.txt" and TAG and type(t) == "string" and t ~= ""
+            and string.sub(t, 1, 1) ~= "#" then
+            return "#" .. TAG .. " " .. t
+        end
+        return t
+    end
     fakeRollFor()
     Minimap = new("Frame", "Minimap", UIParent)
     GetMinimapShape = nil
@@ -280,6 +298,7 @@ local function world(withoutNames)
     RaidResBridge_Sent, RaidResBridge_Options, RaidResBridge_Recent = nil, nil, nil
     RaidResBridge_Spec, RaidResLockReady, RaidResBridge_LockControl = nil, nil, nil
     RaidResBridge_Data, RaidResBridge_Ref, RaidResBridge_Locked = nil, nil, nil
+    RaidResBridge_ForOthers = nil
 
     dofile(DIR .. "expected.lua")
     RaidResBridge_Raids = Expected_Raids
@@ -1559,10 +1578,28 @@ check("and nothing is sent until you sign in", string.find(hint(f), "click Sign 
 RB.sessionExpired = nil
 FILES[CMD] = nil
 click(itemRow(f, mineId))
+check("each command goes with an id", string.find(RAWCMD, "^#%d+ unreserve DEMO42 ") ~= nil, true)
+local firstTag = TAG
 run(46)
+check("a slow helper is still waited on past 45 seconds", RB.reservePending ~= nil, true)
+run(75)
 check("a helper that never answers is given up on", string.find(hint(f), "did not answer", 1, true) ~= nil, true)
 run(5)
 check("and the window stops waiting", RB.reservePending == nil and hint(f) ~= "Waiting on raidres...", true)
+NOW = NOW + 1
+click(itemRow(f, mineId))
+check("the next command has its own id", TAG ~= firstTag, true)
+FILES[RESULT] = "#" .. firstTag .. " ok removed"
+run(1)
+check("the answer to the one given up on, late, isn't taken for it", RB.reservePending ~= nil, true)
+check("and is cleared away", FILES[RESULT], "")
+FILES[RESULT] = "error: bad command"
+local saved = TAG
+TAG = nil
+run(1)
+TAG = saved
+check("an answer without an id says the helper running is an old one",
+    string.find(hint(f), "older copy; restart the game", 1, true) ~= nil, true)
 
 print("everyone else's, and without the helper")
 local other = findRow(f.pRows, "Newbie")
@@ -1792,7 +1829,7 @@ check("a lapsed sign-in says what to do",
     string.find(plain(ev.status:GetText()), "Click Sign in", 1, true) ~= nil, true)
 RB.sessionExpired = nil
 click(ev.create)
-run(46)
+run(121)
 check("a helper that never answers is given up on",
     string.find(plain(ev.status:GetText()), "did not answer", 1, true) ~= nil, true)
 check("and Create works again", ev.create.enabled, true)
@@ -1822,6 +1859,47 @@ check("the group names can't be picked", openMenu(ev.raid)[1].isTitle, 1)
 SlashCmdList.RAIDRESBRIDGE("new")
 run(1)
 check("and asked for once a session", table.getn(ASKED), 1)
+
+print("a new event: when raidres doesn't answer")
+do
+    RB = world()
+    RaidResBridge_NewEvent = nil      -- SR+ off, as raidres starts
+    RaidResLockReady = function() return 1 end
+    SlashCmdList.RAIDRESBRIDGE("")
+    SlashCmdList.RAIDRESBRIDGE("new")
+    local ev3 = RB.eventFrame
+    FILES["RaidResBridge_lock_result.txt"] = "error: CDP eval failed"
+    run(1)
+    local function find(menu, value)
+        for _, info in ipairs(menu) do if info.value == value then return info end end
+    end
+    local retry = find(openMenu(ev3.hr), "retry")
+    check("the HR menu says the saved lists didn't come, and offers to ask again",
+        retry and plain(retry.text), "Couldn't get them. Ask again")
+    FILES["RaidResBridge_lock_cmd.txt"] = nil
+    retry.func()
+    check("asking again sends it again", FILES["RaidResBridge_lock_cmd.txt"], "templates")
+    FILES["RaidResBridge_lock_result.txt"] = "ok templates []"
+    run(1)
+    ev3.srplus:SetChecked(1)
+    fire(ev3.srplus, "OnClick")
+    check("then SR+'s events are asked for", string.find(FILES["RaidResBridge_lock_cmd.txt"], "^suggest ") ~= nil, true)
+    FILES["RaidResBridge_lock_result.txt"] = "error: raidres said HTTP 500"
+    run(1)
+    local again = find(openMenu(ev3.prev), "retry")
+    check("SR+ from says raidres didn't, and offers to ask again", again and plain(again.text),
+        "  raidres didn't say. Ask again")
+    FILES["RaidResBridge_lock_cmd.txt"] = nil
+    pick(again)
+    check("asking again sends it again", string.find(FILES["RaidResBridge_lock_cmd.txt"] or "", "^suggest ") ~= nil, true)
+    FILES["RaidResBridge_lock_result.txt"] = "error: still down"
+    run(1)
+    ev3:Hide()
+    RB.savedLists, RB.templatesState = nil, "failed"    -- as if they had failed too
+    FILES["RaidResBridge_lock_cmd.txt"] = nil
+    SlashCmdList.RAIDRESBRIDGE("new")
+    check("opening the dialog again asks again too", FILES["RaidResBridge_lock_cmd.txt"], "templates")
+end
 
 -- ================================================================== an event's settings
 print("an existing event's settings")
@@ -1881,6 +1959,58 @@ run(1)
 check("raidres's refusal stays in the dialog", plain(ev2.status:GetText()),
     "raidres: The previous event does not have SR+ enabled.")
 ev2:Hide()
+
+print("an existing event's settings, before or without raidres's word on them")
+do
+PAGES["/api/events/DEMO42"] = { body = '{"raidId":100,"allowSrPlus":true,"defaultSrPlusIncrease":0,' ..
+    '"previousRaidEventReference":null,"reservations":[]}' }
+pick(setEntry)
+FILES[RESULT2] = "ok templates []"
+run(1)
+check("an event that adds +0 shows +0", ev2.inc.ddText, "+0")
+FILES[CMD2] = nil
+click(ev2.create)
+check("and saves +0, not +10", FILES[CMD2], "settings DEMO42 srplus=1 inc=0 prev=none")
+FILES[RESULT2] = "ok saved"
+run(1)
+local realGet = RB.Get
+RB.Get = function() end             -- raidres hasn't answered yet
+pick(setEntry)
+check("while raidres is read, the dialog says so", plain(ev2.status:GetText()), "Reading SR+ from raidres...")
+check("and SR+ shows as not known", ev2.inc.ddText .. " " .. ev2.prev.ddText, "+? ?")
+FILES[CMD2] = nil
+click(ev2.create)
+check("Save before it answers leaves SR+ alone", FILES[CMD2], "settings DEMO42")
+FILES[RESULT2] = "ok saved"
+run(1)
+pick(setEntry)
+ev2.srplus:SetChecked(1)
+fire(ev2.srplus, "OnClick")
+pick(entry(openMenu(ev2.inc), 25))
+FILES[CMD2] = nil
+click(ev2.create)
+check("what is changed goes, and only that", FILES[CMD2], "settings DEMO42 srplus=1 inc=25")
+FILES[RESULT2] = "ok saved"
+run(1)
+RB.Get = realGet
+local realHttp = RB.Http
+RB.Http = function() return false end
+pick(setEntry)
+check("without the DLL, the dialog says SR+ is left as it is",
+    string.find(plain(ev2.status:GetText()), "leaves SR+ as it is there unless you change it", 1, true) ~= nil, true)
+FILES[CMD2] = nil
+click(ev2.create)
+check("and Save leaves it so", FILES[CMD2], "settings DEMO42")
+FILES[RESULT2] = "ok saved"
+run(1)
+RB.Http = realHttp
+PAGES["/api/events/DEMO42"] = nil
+pick(setEntry)
+run(1)
+check("a failed read says so, and what Save will do",
+    string.find(plain(ev2.status:GetText()), "couldn't be read", 1, true) ~= nil, true)
+ev2:Hide()
+end
 SlashCmdList.RAIDRESBRIDGE("new")
 check("New event afterwards has every row back", tostring(ev2.raid:IsShown()) .. ev2.create:GetText(),
     "trueCreate event")
@@ -1907,7 +2037,23 @@ fire(srRow, "OnClick", "RightButton")
 check("right-click opens its SR+ menu", f.srMenu.ddOpen, true)
 check("naming whose and what", string.find(plain(MENU[1].text), "Aldwyn's ", 1, true) == 1, true)
 check("set, validate, unvalidate", plain(MENU[2].text) .. " | " .. plain(MENU[3].text) .. " | " .. plain(MENU[4].text),
-    "Set SR+... (now +0) | Mark validated | Mark not validated")
+    "Set SR+... (now +0) | Validated | Not validated")
+check("a state raidres hasn't told this list (fetched by the watcher) isn't ticked",
+    tostring(MENU[3].checked) .. " " .. tostring(MENU[4].checked), "nil nil")
+do
+    -- raidres says an officer validated it: the menu and the row say so
+    local sk = string.lower(RB.player)
+    RB.srValid.demo42 = { [sk] = { [srRow.itemId] = true } }
+    RB.Refresh()
+    fire(srRow, "OnClick", "RightButton")
+    check("validated, it's ticked so", tostring(MENU[3].checked) .. " " .. tostring(MENU[4].checked), "1 nil")
+    enter(srRow)
+    check("and the row's tooltip says it", tipHas("SR+ 0, validated"), true)
+    RB.srValid.demo42 = { [sk] = {} }
+    RB.Refresh()
+    fire(srRow, "OnClick", "RightButton")
+    check("not validated, it's ticked so", tostring(MENU[3].checked) .. " " .. tostring(MENU[4].checked), "nil 1")
+end
 local CMD3, RESULT3 = "RaidResBridge_lock_cmd.txt", "RaidResBridge_lock_result.txt"
 pick(MENU[2])
 check("Set asks for the number", POPUP and POPUP.which, "ZYLLARAIDRES_SRPLUS")
@@ -1979,6 +2125,37 @@ RB.fetched = { unsaved = true, ref = "DEMO42", data = withZed }
 RB.waiting = nil
 RB.Refresh()
 check("theirs on raidres can be taken back here", f.dRows[1].remove:IsShown(), true)
+do
+enter(itemRow(f, zedId))
+check("the loot's tooltip says the click takes it back for them",
+    tipHas("Click: take it back on raidres for Zed"), true)
+check("not that it's theirs alone to change", tipHas("Zed reserved this on raidres."), false)
+local zedOther
+for _, r in ipairs(visible(f.lRows)) do
+    if r.data and r.data.item and r.data.item.g ~= zedId and not f.snap.hard[r.data.item.g] then
+        zedOther = zedOther or r
+    end
+end
+enter(zedOther)
+check("one they don't hold: reserve it on raidres for them", tipHas("Click: reserve it on raidres for Zed"), true)
+do
+    -- two copies of it: one row, x2, its X taking one back
+    local twice = withZed.softreserves[table.getn(withZed.softreserves)]
+    table.insert(twice.items, { id = zedId, quality = 4 })
+    RB.Refresh()
+    check("two copies show as one row, x2", string.find(plain(f.dRows[1].text:GetText()), " x2", 1, true) ~= nil, true)
+    check("and only one row", f.dRows[2]:IsShown(), false)
+    check("its X takes back one of them", f.dRows[1].remove.tipBody,
+        "Take back one of the 2 copies on raidres. The list is fetched again after.")
+    RaidResBridge_Limit = 2
+    RB.Refresh()
+    enter(zedOther)
+    check("two copies make them full on raidres", tipHas("Zed is full on raidres."), true)
+    RaidResBridge_Limit = nil
+    table.remove(twice.items)
+    RB.Refresh()
+end
+end
 click(f.dRows[1].remove)
 check("as theirs", FILES[CMD4], "unreserve-for DEMO42 " .. zedId .. " Zed")
 FILES[RESULT4] = "error: Zed signed up on raidres themselves; they change it there"
@@ -1997,7 +2174,9 @@ check("not a name with digits", string.find(hint(f), "isn't a character name", 1
 RB.AddPlayerNamed("wiredbro")
 check("then their class", f.classMenu.ddOpen, true)
 pick(entry(MENU, "WARRIOR"))
-check("added, ticked and picked", RB.player .. " " .. tostring(RB.forOthers.wiredbro), "Wiredbro true")
+check("added, ticked and picked", RB.player .. " " .. tostring(RB.ForOther("DEMO42", "wiredbro")), "Wiredbro true")
+check("kept with the list, for after a /reload", RaidResBridge_ForOthers.demo42.wiredbro.on, true)
+check("as added here, with their class", RaidResBridge_ForOthers.demo42.wiredbro.class, "WARRIOR")
 check("then their spec, from raidres's list for that class", MENU[1] and plain(MENU[1].text),
     "Wiredbro's warrior spec on raidres")
 pick(entry(MENU, "WarriorFury"))
@@ -2012,8 +2191,39 @@ check("their picks go to raidres with their class and spec",
 FILES[RESULT4] = "ok reserved WarriorFury"
 run(1)
 
-RB.extraPlayers = nil
-check("next session, their class comes back from the spec kept", RB.ClassOf("Wiredbro"), "WARRIOR")
+do
+    local kept = RaidResBridge_ForOthers.demo42.wiredbro
+    RaidResBridge_ForOthers.demo42.wiredbro = nil
+    check("not added here, their class comes back from the spec kept", RB.ClassOf("Wiredbro"), "WARRIOR")
+    RaidResBridge_ForOthers.demo42.wiredbro = kept
+    local others = RB.Players({ ref = "OTHER1", merged = { softreserves = {} } })
+    local shownElsewhere = false
+    for _, p in ipairs(others) do if p.name == "Wiredbro" then shownElsewhere = true end end
+    check("added to one list, they're not on another's", shownElsewhere, false)
+    check("nor ticked there", RB.ForOther("OTHER1", "Wiredbro"), false)
+    -- a /reload: what's kept brings them back as they were
+    local saved = RaidResBridge_ForOthers
+    RB.fetched.unsaved = true
+    RaidResBridge_ForOthers = saved
+    RB.Refresh()
+    check("after a /reload they're still reserved for on raidres", RB.ReservesForOther(f.snap, "Wiredbro"), true)
+    RB.RememberList("DEMO42", { metadata = {} })
+    check("kept while the list is on the Recent menu", RaidResBridge_ForOthers.demo42 ~= nil, true)
+    RaidResBridge_ForOthers.gone11 = { x = { name = "X", on = true } }
+    RB.RememberList("DEMO42", { metadata = {} })
+    check("forgotten with a list that's left it", RaidResBridge_ForOthers.gone11, nil)
+end
+
+print("names with accents")
+RB.AddPlayerNamed("Ëlïsàbëthéàn")
+check("twelve letters with accents are a name", RB.addingName, "Ëlïsàbëthéàn")
+RB.addingName = nil
+RB.AddPlayerNamed("Ëlïsàbëthéànë")
+check("thirteen aren't", RB.addingName, nil)
+RB.AddPlayerNamed("Ä")
+check("nor one", RB.addingName, nil)
+check("the box holds twelve accented letters' bytes",
+    StaticPopupDialogs.ZYLLARAIDRES_ADDPLAYER.maxLetters >= string.len("Ëlïsàbëthéàn"), true)
 
 print("and not for yourself, or without the helper")
 fire(findRow(f.pRows, "Tester"), "OnClick", "RightButton")

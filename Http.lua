@@ -181,6 +181,34 @@ local function srPlus(r)
     return tonumber(sp) or 0
 end
 
+--[[ Which SR+ an officer validated, kept beside the list rather than in it:
+     the list is what RollFor gets, the same either way it was fetched.
+       RB.srValid[lower(ref)][lower(name)][WoW item id] = true
+     when every copy of that item is validated. ]]
+RB.srValid = RB.srValid or {}
+function RB.NoteSrValid(ref, event, raid)
+    if not ref or type(event) ~= "table" then return end
+    local byItem = {}
+    for _, it in ipairs((raid and raid.raidItems) or {}) do byItem[it.id] = it.gameDbItemId end
+    local out, unvalid = {}, {}
+    for _, r in ipairs(event.reservations or {}) do
+        local item = byItem[r.raidItemId]
+        local name = r.character and r.character.name
+        if item and name then
+            local k = string.lower(string.gsub(name, "%s", ""))
+            out[k] = out[k] or {}
+            unvalid[k] = unvalid[k] or {}
+            local sp = r.srPlus
+            if type(sp) == "table" and sp.isValid == true and not unvalid[k][item] then
+                out[k][item] = true
+            else
+                out[k][item], unvalid[k][item] = nil, true
+            end
+        end
+    end
+    RB.srValid[string.lower(ref)] = out
+end
+
 function RB.Convert(ref, event, raid)
     local byItem = {}
     for _, it in ipairs(raid.raidItems or {}) do byItem[it.id] = it end
@@ -600,6 +628,7 @@ function RB.HttpRequest(ref)
             if not raid then say("|cffff5179" .. rwhy .. "|r") return end
 
             local data, stats = RB.Convert(ref, event, raid)
+            RB.NoteSrValid(ref, event, raid)
             RB.Store(ref, data, stats)
 
             RB.LoadRaids()
@@ -668,7 +697,47 @@ end
 local LOCK_CMD    = "RaidResBridge_lock_cmd.txt"
 local LOCK_RESULT = "RaidResBridge_lock_result.txt"
 local LOCK_POLL   = 0.5
-local LOCK_TIMEOUT = 15
+--[[ How long any command may take: the helper may first have to restart
+     Chrome (10s), start it (20s) and open a raidres tab (20s), then wait on
+     the page itself (45s). Giving up sooner only meant a late answer -- now
+     told apart by its id -- and a second try that queues behind the first. ]]
+local HELPER_TIMEOUT = 120
+
+--[[ Every command goes as "#ID command" and the helper answers "#ID result".
+     There is one file each way, so an answer to a command the game gave up
+     on can arrive after the next one is sent: its id says it isn't this
+     one's. The ids are this PC's uptime in milliseconds, so they keep
+     growing across a /reload. ]]
+local lastId = 0
+local function post(cmd)
+    local id = math.floor(GetTime() * 1000)
+    if id <= lastId then id = lastId + 1 end
+    lastId = id
+    id = string.format("%.0f", id)
+    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
+    if not pcall(WriteCustomFile, LOCK_CMD, "#" .. id .. " " .. cmd, "w") then return nil end
+    return id
+end
+
+--[[ The answer to `pending`, or nil while there's none yet. Another
+     command's answer is thrown away. One without an id comes from a helper
+     older than this addon, still running from before an update. ]]
+local function answer(pending)
+    local ok, text = pcall(ReadCustomFile, LOCK_RESULT)
+    if not ok or type(text) ~= "string" or text == "" then return nil end
+    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
+    local _, _, id, rest = string.find(text, "^#(%d+) (.*)$")
+    if not id then
+        return "error: the lock helper running is an older copy; restart the game to start the new one"
+    end
+    if id ~= pending.id then return nil end
+    return rest
+end
+
+function RB.PostHelperCommand(cmd)
+    if not RB.FileAPI() then return false end
+    return post(cmd) ~= nil
+end
 
 function RB.LockControlReady()
     if RaidResLockReady then return RB.FileAPI() end
@@ -695,27 +764,23 @@ end
 
 function RB.SendLockCommand(ref, lock)
     if not RB.LockControlReady() or RB.HelperBusy() then return false end
-    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
-    local cmd = (lock and "lock " or "unlock ") .. ref
-    local ok = pcall(WriteCustomFile, LOCK_CMD, cmd, "w")
-    if not ok then return false end
-    RB.lockPending = { ref = ref, lock = lock, sent = GetTime() }
+    local id = post((lock and "lock " or "unlock ") .. ref)
+    if not id then return false end
+    RB.lockPending = { id = id, ref = ref, lock = lock, sent = GetTime() }
     lockTick:Show()
     return true
 end
 
 function RB.SendOpenCommand(ref)
-    if not RB.FileAPI() then return false end
-    local ok = pcall(WriteCustomFile, LOCK_CMD, "open " .. ref, "w")
-    return ok
+    if not RB.FileAPI() or RB.HelperBusy() then return false end
+    return post("open " .. ref) ~= nil
 end
 
 function RB.SendSigninCommand(ref)
     if not RB.FileAPI() or RB.HelperBusy() then return false end
-    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
-    local ok = pcall(WriteCustomFile, LOCK_CMD, "signin " .. ref, "w")
-    if not ok then return false end
-    RB.lockPending = { ref = ref, signin = true, sent = GetTime() }
+    local id = post("signin " .. ref)
+    if not id then return false end
+    RB.lockPending = { id = id, ref = ref, signin = true, sent = GetTime() }
     lockTick:Show()
     return true
 end
@@ -733,8 +798,6 @@ end
 -- are before it sends anything.
 -- ---------------------------------------------------------------------------
 
-local RESERVE_TIMEOUT = 45
-
 -- forOther: as the list's admin, for another player (reserve-for / unreserve-for)
 function RB.SendReserveCommand(ref, itemId, name, class, spec, remove, forOther)
     if not RB.LockControlReady() or RB.HelperBusy() then return false end
@@ -746,9 +809,9 @@ function RB.SendReserveCommand(ref, itemId, name, class, spec, remove, forOther)
         cmd = verb .. " " .. ref .. " " .. itemId .. " " .. name .. " " .. class ..
             (spec and (" " .. spec) or "")
     end
-    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
-    if not pcall(WriteCustomFile, LOCK_CMD, cmd, "w") then return false end
-    RB.reservePending = { ref = ref, item = itemId, name = name, class = class,
+    local id = post(cmd)
+    if not id then return false end
+    RB.reservePending = { id = id, ref = ref, item = itemId, name = name, class = class,
                           remove = remove, forOther = forOther, sent = GetTime() }
     lockTick:Show()
     return true
@@ -757,15 +820,14 @@ end
 function RB.CheckReserveResult()
     local pending = RB.reservePending
     if not pending then return end
-    if GetTime() - pending.sent > RESERVE_TIMEOUT then
+    if GetTime() - pending.sent > HELPER_TIMEOUT then
         RB.reservePending = nil
         if RB.Notice then RB.Notice("the lock script did not answer. Is it running?") end
         if RB.Draw then RB.Draw() end
         return
     end
-    local ok, text = pcall(ReadCustomFile, LOCK_RESULT)
-    if not ok or type(text) ~= "string" or text == "" then return end
-    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
+    local text = answer(pending)
+    if not text then return end
     RB.reservePending = nil
     if RB.OnReserveResult then RB.OnReserveResult(pending, text) end
 end
@@ -779,8 +841,6 @@ end
 -- The date and time are this PC's clock, as the game shows it; the helper
 -- turns them into the UTC raidres keeps. The switches go as 0 or 1.
 -- ---------------------------------------------------------------------------
-
-local CREATE_TIMEOUT = 45
 
 -- What SR+ carries from the event it follows, as the site copies it: how many
 -- events may be skipped, whether people type their own, whether it's checked.
@@ -810,17 +870,20 @@ function RB.SendCreateCommand(e)
     local cmd = "create " .. e.raid .. " " .. e.day .. " " .. e.clock .. " " .. e.limit ..
         " " .. bit(e.lock) .. " " .. bit(e.comments) .. " " .. bit(e.srplus) ..
         " " .. bit(e.dupes) .. opts .. ((desc ~= "" and desc ~= " ") and (" " .. desc) or "")
-    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
-    if not pcall(WriteCustomFile, LOCK_CMD, cmd, "w") then return false end
-    RB.createPending = { event = e, sent = GetTime() }
+    local id = post(cmd)
+    if not id then return false end
+    RB.createPending = { id = id, event = e, sent = GetTime() }
     lockTick:Show()
     return true
 end
 
 --[[ An existing event's hard reserves and SR+:
-       settings REF [hr=ID,ID|hr=none|tpl=ID] srplus=0|1 [inc=N] [prev=REF|none]
+       settings REF [hr=ID,ID|hr=none|tpl=ID] [srplus=0|1] [inc=N] [prev=REF|none]
      -> ok saved. Hard reserves go only when they were changed, so ones made
-     on the site with class limits or notes aren't flattened by a save. ]]
+     on the site with class limits or notes aren't flattened by a save. SR+
+     goes as raidres was read to have it (e.known) or as changed here
+     (e.set): a field neither read nor changed is left out, and the helper
+     leaves it alone. ]]
 function RB.SendSettingsCommand(ref, e)
     if not RB.LockControlReady() or RB.HelperBusy() then return false end
     local cmd = "settings " .. ref
@@ -829,13 +892,19 @@ function RB.SendSettingsCommand(ref, e)
     elseif e.hrChanged then
         cmd = cmd .. " hr=" .. ((table.getn(e.hr) > 0) and table.concat(e.hr, ",") or "none")
     end
-    cmd = cmd .. " srplus=" .. (e.srplus and "1" or "0")
-    if e.srplus then
-        cmd = cmd .. " inc=" .. (e.inc or 0) .. " prev=" .. (e.prev or "none") .. carried(e)
+    local set = e.set or {}
+    local function has(field) return e.known or set[field] end
+    if has("srplus") then
+        cmd = cmd .. " srplus=" .. (e.srplus and "1" or "0")
+        if e.srplus then
+            if has("inc") then cmd = cmd .. " inc=" .. (e.inc or 0) end
+            if has("prev") then cmd = cmd .. " prev=" .. (e.prev or "none") end
+            cmd = cmd .. carried(e)
+        end
     end
-    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
-    if not pcall(WriteCustomFile, LOCK_CMD, cmd, "w") then return false end
-    RB.createPending = { settings = ref, event = e, sent = GetTime() }
+    local id = post(cmd)
+    if not id then return false end
+    RB.createPending = { id = id, settings = ref, event = e, sent = GetTime() }
     lockTick:Show()
     return true
 end
@@ -847,9 +916,9 @@ function RB.SendSrPlusCommand(ref, itemId, name, value, valid)
     local cmd = "srplus " .. ref .. " " .. itemId .. " " .. name
     if value ~= nil then cmd = cmd .. " value=" .. value end
     if valid ~= nil then cmd = cmd .. " valid=" .. (valid and "1" or "0") end
-    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
-    if not pcall(WriteCustomFile, LOCK_CMD, cmd, "w") then return false end
-    RB.createPending = { srplus = ref, sent = GetTime() }
+    local id = post(cmd)
+    if not id then return false end
+    RB.createPending = { id = id, srplus = ref, sent = GetTime() }
     lockTick:Show()
     return true
 end
@@ -859,9 +928,9 @@ end
      slot, so a list fetch and a create never cross. ]]
 function RB.SendTemplatesCommand()
     if not RB.LockControlReady() or RB.HelperBusy() then return false end
-    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
-    if not pcall(WriteCustomFile, LOCK_CMD, "templates", "w") then return false end
-    RB.createPending = { templates = true, sent = GetTime() }
+    local id = post("templates")
+    if not id then return false end
+    RB.createPending = { id = id, templates = true, sent = GetTime() }
     lockTick:Show()
     return true
 end
@@ -871,9 +940,9 @@ end
      skip, input, valid}, ...]", newest first. ]]
 function RB.SendSuggestCommand(raid)
     if not RB.LockControlReady() or RB.HelperBusy() then return false end
-    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
-    if not pcall(WriteCustomFile, LOCK_CMD, "suggest " .. raid, "w") then return false end
-    RB.createPending = { suggest = raid, sent = GetTime() }
+    local id = post("suggest " .. raid)
+    if not id then return false end
+    RB.createPending = { id = id, suggest = raid, sent = GetTime() }
     lockTick:Show()
     return true
 end
@@ -899,13 +968,11 @@ function RB.CheckCreateResult()
     local pending = RB.createPending
     if not pending then return end
     local text
-    if GetTime() - pending.sent > CREATE_TIMEOUT then
+    if GetTime() - pending.sent > HELPER_TIMEOUT then
         text = "error: the lock script did not answer. Is it running?"
     else
-        local ok, got = pcall(ReadCustomFile, LOCK_RESULT)
-        if not ok or type(got) ~= "string" or got == "" then return end
-        pcall(WriteCustomFile, LOCK_RESULT, "", "w")
-        text = got
+        text = answer(pending)
+        if not text then return end
     end
     RB.createPending = nil
     if pending.templates then
@@ -922,15 +989,14 @@ end
 function RB.CheckLockResult()
     if not RB.lockPending then return end
     local pending = RB.lockPending
-    if GetTime() - pending.sent > LOCK_TIMEOUT then
+    if GetTime() - pending.sent > HELPER_TIMEOUT then
         RB.lockPending = nil
         if RB.Notice then RB.Notice("lock script did not answer. Is it running?") end
         if RB.DrawStatus then RB.DrawStatus() end
         return
     end
-    local ok, text = pcall(ReadCustomFile, LOCK_RESULT)
-    if not ok or type(text) ~= "string" or text == "" then return end
-    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
+    local text = answer(pending)
+    if not text then return end
     RB.lockPending = nil
     if text == "ok" or string.sub(text, 1, 3) == "ok " then
         if pending.signin then

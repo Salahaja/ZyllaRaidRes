@@ -268,8 +268,18 @@ function RB.InitEventHrMenu()
     end
     if not any then
         local info = {}
-        info.text = RB.savedLists and "None for this raid" or "Asking raidres..."
-        info.disabled = 1
+        if RB.savedLists then
+            info.text = "None for this raid"
+            info.disabled = 1
+        elseif RB.templatesState == "asking" then
+            info.text = "Asking raidres..."
+            info.disabled = 1
+        else
+            -- it failed, or the helper was busy: asked again from here
+            info.text = "Couldn't get them. Ask again"
+            info.value = "retry"
+            info.func = RB.RetryTemplates
+        end
         UIDropDownMenu_AddButton(info)
     end
     add("Pick items")
@@ -290,21 +300,54 @@ function RB.InitEventHrMenu()
     end
 end
 
+--[[ Your saved HR lists, asked of raidres once a session. RB.templatesState
+     is "asking" while it's out and "failed" when it came back without them:
+     the HR menu then offers to ask again, and so does opening the dialog. ]]
+local function askTemplates()
+    if RB.savedLists or RB.templatesState or RB.HelperBusy() then return end
+    if RB.SendTemplatesCommand() then RB.templatesState = "asking" end
+end
+
+function RB.RetryTemplates()
+    if CloseDropDownMenus then CloseDropDownMenus() end
+    RB.templatesState = nil
+    askTemplates()
+    RB.DrawNewEvent()
+end
+
 function RB.OnTemplatesResult(text)
     RB.savedLists = RB.ReadTemplates(text) or RB.savedLists
+    RB.templatesState = (not RB.savedLists) and "failed" or nil
     if not RB.savedLists and string.sub(text, 1, 6) == "signin" then RB.sessionExpired = true end
     RB.DrawNewEvent()
+end
+
+-- What failed last time is asked again when the dialog opens.
+local function forgetFailures()
+    if RB.templatesState == "failed" then RB.templatesState = nil end
+    for raid, v in pairs(RB.prevAsked or {}) do
+        if v == "failed" then RB.prevAsked[raid] = nil end
+    end
 end
 
 -- ---------------------------------------------------------------------------
 -- SR+: how much each event adds, and the list it carries over from
 -- ---------------------------------------------------------------------------
 
-local function onPickInc() form().inc = this.value; picked() end
+-- What was changed here, field by field: Event settings saves only those
+-- and what raidres was read to have, never a default it wasn't.
+local function touched(e, field) e.set = e.set or {}; e.set[field] = true end
+
+local function onPickInc() touched(form(), "inc"); form().inc = this.value; picked() end
 local function onPickPrev()
     if CloseDropDownMenus then CloseDropDownMenus() end
     if this.value == "type" then
         RB.AskPrevCode()
+        return
+    end
+    if this.value == "retry" then
+        RB.prevAsked[form().raid] = nil
+        RB.DrawNewEvent()       -- which asks again
         return
     end
     local e = form()
@@ -352,7 +395,7 @@ function RB.InitEventPrevMenu()
         end
         if not any then add(UI.hex(UI.GREY, "  none yet"), "-", nil) end
     elseif RB.prevAsked[e.raid] == "failed" then
-        add(UI.hex(UI.GREY, "  raidres didn't say"), "-", nil)
+        add("  raidres didn't say. Ask again", "retry", onPickPrev)
     elseif e.raid then
         add(UI.hex(UI.GREY, "  asking raidres..."), "-", nil)
     end
@@ -399,6 +442,8 @@ local function toggle(f, name, text, field, tipText, y)
     c.field = field
     c:SetScript("OnClick", function()
         form()[this.field] = this:GetChecked() and true or false
+        form().set = form().set or {}
+        form().set[this.field] = true
         RB.DrawNewEvent()       -- SR+ shows or hides its own row
     end)
     c.tipText = tipText
@@ -522,6 +567,7 @@ function RB.PickPrev(ref, from)
     local e = form()
     if not e then return end
     e.prev = ref
+    touched(e, "prev")
     if not ref then
         e.skip, e.input, e.valid = nil, nil, nil
     elseif from and (from.inc or 0) > 0 then
@@ -624,6 +670,7 @@ end
 function RB.DrawNewEvent()
     local f, e = RB.eventFrame, RB.eventForm
     if not f or not e then return end
+    askTemplates()              -- the helper may have been busy when it opened
     askSuggestions(e)
     UIDropDownMenu_SetText((e.raid and raidName(e.raid)) or "Pick a raid", f.raid)
     UIDropDownMenu_SetText(dayName(e.day), f.day)
@@ -641,8 +688,11 @@ function RB.DrawNewEvent()
         hr = table.getn(e.hr) .. (table.getn(e.hr) == 1 and " item" or " items")
     end
     UIDropDownMenu_SetText(hr, f.hr)
-    UIDropDownMenu_SetText("+" .. e.inc, f.inc)
-    UIDropDownMenu_SetText(e.prev or "Start fresh", f.prev)
+    -- an event's settings not read from raidres show as not known
+    local known = not f.mode or e.known
+    local set = e.set or {}
+    UIDropDownMenu_SetText((known or set.inc) and ("+" .. e.inc) or "+?", f.inc)
+    UIDropDownMenu_SetText((known or set.prev) and (e.prev or "Start fresh") or "?", f.prev)
     local sr = { f.srLabel, f.inc, f.fromLabel, f.prev }
     for i = 1, table.getn(sr) do
         if e.srplus then sr[i]:Show() else sr[i]:Hide() end
@@ -717,7 +767,8 @@ function RB.OpenNewEvent()
     layout(f, false)
     note("")
     -- your saved HR lists, through the helper, once a session
-    if not RB.savedLists and not RB.HelperBusy() then RB.SendTemplatesCommand() end
+    forgetFailures()
+    askTemplates()
     -- raidres's own raid list, grouped; quietly, once a session
     if RB.Http and RB.Http() and not RB.raidList and not RB.eventRaidsAsked then
         RB.eventRaidsAsked = true
@@ -754,22 +805,39 @@ function RB.OpenEventSettings()
     local hr = {}
     for id in pairs(s.hard) do table.insert(hr, id) end
     table.sort(hr)
+    -- SR+ as raidres has it isn't known until it's read (with the DLL):
+    -- until then Save sends only what is changed here (e.set)
     RB.eventForm = { raid = s.instance, hr = hr, srplus = false, inc = 10, prev = nil,
-                     day = date("%Y-%m-%d"), hour = 20, minute = 0, limit = 1 }
+                     day = date("%Y-%m-%d"), hour = 20, minute = 0, limit = 1,
+                     known = false, set = {} }
     f.mode = s.ref
     f.title:SetText("Event settings: " .. s.ref)
     layout(f, true)
-    note("")
-    if not RB.savedLists and not RB.HelperBusy() then RB.SendTemplatesCommand() end
+    local unread = "raidres's SR+ settings for this event couldn't be read, so Save " ..
+        "leaves SR+ as it is there unless you change it here."
     if RB.Http and RB.Http() then
-        RB.HttpEventSettings(s.ref, function(now)
+        note("Reading SR+ from raidres...", UI.GOLD)
+        RB.HttpEventSettings(s.ref, function(now, why)
             local e = RB.eventForm
-            if not now or not e or f.mode ~= s.ref then return end
-            e.srplus, e.prev = now.srplus, now.prev
-            if now.inc > 0 then e.inc = now.inc end
+            if not e or f.mode ~= s.ref or e.known then return end
+            if not now then
+                note((why and (why .. ". ") or "") .. unread, UI.GOLD)
+                return
+            end
+            -- what was already changed here stays as changed
+            local set = e.set or {}
+            if not set.srplus then e.srplus = now.srplus end
+            if not set.prev then e.prev = now.prev end
+            if not set.inc then e.inc = now.inc end
+            e.known = true
+            note("")
             RB.DrawNewEvent()
         end)
+    else
+        note("Without RaidResHttp.dll, " .. unread, UI.GOLD)
     end
+    forgetFailures()
+    askTemplates()
     RB.DrawNewEvent()
     f:Show()
 end
