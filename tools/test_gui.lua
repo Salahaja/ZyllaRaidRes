@@ -2225,11 +2225,43 @@ check("nor one", RB.addingName, nil)
 check("the box holds twelve accented letters' bytes",
     StaticPopupDialogs.ZYLLARAIDRES_ADDPLAYER.maxLetters >= string.len("Ëlïsàbëthéàn"), true)
 
+print("making a player an admin of the list")
+do
+    local function menuEntry(value)
+        for _, info in ipairs(MENU) do if info.value == value then return info end end
+    end
+    RB.OpenPlayerMenu({ name = "Brisa" })
+    local make, unmake = menuEntry("admin"), menuEntry("unadmin")
+    check("someone on the raidres list can be made an admin", make and plain(make.text), "Make admin of this list")
+    check("or taken off", unmake and plain(unmake.text), "Remove as admin")
+    FILES[CMD4] = nil
+    pick(make)
+    check("it goes to the helper by name", FILES[CMD4], "admin DEMO42 Brisa add")
+    FILES[RESULT4] = "ok admin 2"
+    run(1)
+    check("and says so", string.find(hint(f), "Brisa is now an admin of the list on raidres (2 of 10)", 1, true) ~= nil,
+        true)
+    RB.OpenPlayerMenu({ name = "Brisa" })
+    pick(menuEntry("unadmin"))
+    check("taking them off goes as such", FILES[CMD4], "admin DEMO42 Brisa remove")
+    FILES[RESULT4] = "error: Brisa isn't an admin of it"
+    run(1)
+    check("raidres's no in its words", string.find(hint(f), "raidres: Brisa isn't an admin of it", 1, true) ~= nil,
+        true)
+    RB.OpenPlayerMenu({ name = "Wiredbro" })
+    check("not someone only added here: raidres doesn't know their account", menuEntry("admin"), nil)
+    RB.OpenPlayerMenu({ name = "Nobodyhere" })
+    check("nor someone not on the raidres list", menuEntry("admin"), nil)
+end
+
 print("and not for yourself, or without the helper")
 fire(findRow(f.pRows, "Tester"), "OnClick", "RightButton")
 local selfToggle
 for _, info in ipairs(MENU) do if info.value == "toggle" then selfToggle = info end end
 check("your own row has no for-someone tick", selfToggle, nil)
+check("nor an admin entry", (function()
+    for _, info in ipairs(MENU) do if info.value == "admin" then return true end end
+    return false end)(), false)
 RaidResLockReady = nil
 f.playerMenu.ddOpen = nil
 fire(zed, "OnClick", "RightButton")

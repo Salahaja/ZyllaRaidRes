@@ -563,8 +563,8 @@ won't take, such as carrying SR+ from a list without SR+, in its own words.
 
 **One player's SR+**: on a raidres list with SR+ on, right-click one of a
 player's raidres reserves in the Reserves box. **Set SR+...** changes its
-number; **Mark validated** and **Mark not validated** do what raidres's SR+
-editor's checkbox does. It makes the same request that editor makes, so only
+number; **Validated** and **Not validated** do what raidres's SR+ editor's
+checkbox does, the current one ticked when raidres has said which. It makes the same request that editor makes, so only
 the list's owner and its admins can; raidres says so if you can't. The list
 is fetched again afterwards.
 
@@ -576,6 +576,13 @@ their spec once, and the X takes their reserve back off. That option is only
 for the list's owner and its admins, and the reserve is filed under your
 raidres account, so they can't change it on the site; you and the list's admins
 can. Someone who signed up on raidres themselves is left to change their own.
+
+**Making someone an admin of the list**: right-click a player on a raidres
+list and pick **Make admin of this list** or **Remove as admin**. raidres knows
+them by the account they signed up with, so it works only for someone who
+reserved on the site themselves, and only the list's owner can do it; raidres
+takes up to 10 admins. The other admins are kept as they are. From a terminal:
+`python tools/raidres_lock.py admin REF NAME add --dry-run`.
 
 From a terminal, `tools/raidres_lock.py create` does the same, and `--dry-run`
 shows what it would send:

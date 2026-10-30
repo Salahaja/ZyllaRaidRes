@@ -917,7 +917,49 @@ local function onPickPlayerMenu()
         if x.on or x.added then list[k] = x else list[k] = nil end
         if x.on then RB.player = p.name end
         RB.Draw()
+    elseif (this.value == "admin" or this.value == "unadmin") and p then
+        RB.SendAdmin(p.name, this.value == "admin")
     end
+end
+
+--[[ Can `name` be made an admin of the list from here? Only someone on the
+     raidres list, not you, and not someone only added here: raidres knows
+     a player by the account they signed up with. ]]
+local function canAdmin(s, name)
+    if not s.web[key(name)] or RB.MySignup(s, name) ~= nil then return false end
+    local x = RB.OthersFor(s.ref)[key(name)]
+    return not (x and x.added)
+end
+
+--- Make `name` an admin of the shown list on raidres, or no longer one.
+function RB.SendAdmin(name, add)
+    local s = RB.gui and RB.gui.snap
+    if not s or not s.ref or s.ref == "manual" then return end
+    if RB.HelperBusy() then
+        RB.Notice("still waiting on raidres for the last one.")
+        return
+    end
+    if not RB.SendAdminCommand(s.ref, name, add) then
+        RB.Notice("can't reach the lock script. Is Nampower loaded?")
+        return
+    end
+    RB.Notice((add and "making " .. name .. " an admin" or "taking " .. name .. " off the admins") ..
+        " of the list on raidres...")
+    RB.DrawStatus()
+end
+
+function RB.OnAdminResult(pending, text)
+    local _, _, count = string.find(text, "^ok admin (%d+)$")
+    if count then
+        RB.Notice(pending.add and (pending.name .. " is now an admin of the list on raidres (" ..
+            count .. " of 10).") or (pending.name .. " is no longer an admin of the list on raidres."))
+    elseif string.sub(text, 1, 6) == "signin" then
+        RB.sessionExpired = true
+        RB.Notice("raidres session expired. Click Sign in.")
+    else
+        RB.Notice((string.gsub(text, "^error: ", "raidres: ")))
+    end
+    RB.DrawStatus()
 end
 
 function RB.InitPlayerMenu()
@@ -941,6 +983,18 @@ function RB.InitPlayerMenu()
             info.text = "Reserve on raidres for them"
         end
         UIDropDownMenu_AddButton(info)
+        if canAdmin(s, p.name) then
+            info = {}
+            info.text = "Make admin of this list"
+            info.value = "admin"
+            info.func = onPickPlayerMenu
+            UIDropDownMenu_AddButton(info)
+            info = {}
+            info.text = "Remove as admin"
+            info.value = "unadmin"
+            info.func = onPickPlayerMenu
+            UIDropDownMenu_AddButton(info)
+        end
     end
     info = {}
     info.text = "Add someone not listed..."

@@ -97,6 +97,8 @@ check("a short command is refused before Chrome", w.create_event(["95", "2026-11
 check("a bad setting is refused before Chrome", w.event_settings(["DEMO42", "srplus=maybe"]),
       "error: srplus must be 0 or 1")
 check("so is an unknown one", w.event_settings(["DEMO42", "admins=all"]), "error: bad setting: 'admins=all'")
+check("an admin change must say which way", w.set_admin(["DEMO42", "Brisa", "maybe"]), "error: bad command")
+check("and a name, not a path", w.set_admin(["DEMO42", "../x", "add"]), "error: bad character name: '../x'")
 check("an SR+ change must say what", w.set_srplus(["DEMO42", "1", "Aldwyn", "value=x"]),
       "error: bad SR+ change: 'value=x'")
 opts, desc = w.split_options(["hr=19137,17076", "inc=10", "prev=WW8CK7", "MC", "inc=5", "night"])
@@ -484,6 +486,48 @@ try:
     answer, sent = run({"ref": "DEMO42", "item": tg, "name": "Aldwyn", "value": 5},
                        script=w._SRPLUS_JS, event=sr, reply={"status": 403, "body": {"message": "Forbidden"}})
     check("raidres's no to a non-officer, in its words", answer.get("message"), "Forbidden")
+
+    print("admins of the list")
+    owned = copy.deepcopy(OPEN) | {"isAuthor": True, "authorId": "1000", "extraAdministratorUserIds": ["1003"]}
+    def admin(name, add=True, event=owned, dry=False):
+        return run({"ref": "DEMO42", "name": name, "add": add, "dry": dry}, script=w._ADMIN_JS,
+                   event=event, reply={"status": 200, "body": {}})
+    answer, sent = admin("brisa")
+    check("made an admin", answer, {"result": "ok", "done": "admin", "count": 2})
+    check("with one PATCH of the whole list, the one there kept", (sent[0]["method"], sent[0]["url"],
+          sent[0]["body"]), ("PATCH", "/api/events/DEMO42",
+          {"reference": "DEMO42", "extraAdministratorUserIdentifiers": ["1003", "1001"]}))
+    answer, sent = admin("Dagny", add=False)
+    check("taken off, the rest kept", (answer.get("count"), sent[0]["body"]["extraAdministratorUserIdentifiers"]),
+          (0, []))
+    answer, sent = admin("Brisa", dry=True)
+    check("a dry run plans it and sends nothing", (answer["result"], answer["body"]["extraAdministratorUserIdentifiers"],
+          sent), ("plan", ["1003", "1001"], []))
+    answer, sent = admin("Dagny")
+    check("one already an admin is refused", (answer.get("message"), sent), ("Dagny is already an admin of it", []))
+    answer, sent = admin("Brisa", add=False)
+    check("one who isn't can't be taken off", answer.get("message"), "Brisa isn't an admin of it")
+    answer, sent = admin("Aldwyn")
+    check("nor the owner made one", (answer.get("message"), sent), ("Aldwyn owns the list", []))
+    answer, sent = admin("Nobody")
+    check("someone not on the list is refused", answer.get("message"), "Nobody isn't signed up on this list")
+    answer, sent = admin("Wiredbro", event=made | {"authorId": "1000", "extraAdministratorUserIds": []})
+    check("someone only reserved for by another isn't known by raidres's account", (answer.get("message"), sent),
+          ("Wiredbro was reserved for by someone else; they sign up on raidres themselves first", []))
+    full = copy.deepcopy(owned) | {"extraAdministratorUserIds": [str(2000 + i) for i in range(10)]}
+    answer, sent = admin("Brisa", event=full)
+    check("not an eleventh", (answer.get("message"), sent),
+          ("the list has 10 admins already, as many as raidres takes", []))
+    answer, sent = admin("Brisa", event=copy.deepcopy(owned) | {"isAuthor": False})
+    check("only the owner changes them", (answer.get("message"), sent),
+          ("only the list's owner can change its admins", []))
+    twice = copy.deepcopy(owned)
+    twice["reservations"].append(copy.deepcopy(next(r for r in twice["reservations"]
+                                                    if r["character"]["name"] == "Brisa")))
+    twice["reservations"][-1]["user"] = {"id": "4444"}
+    answer, sent = admin("Brisa", event=twice)
+    check("two accounts under one name aren't guessed between", (answer.get("message"), sent),
+          ("two raidres accounts signed up as Brisa", []))
 finally:
     ws.close()
     w.kill_chrome()

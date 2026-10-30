@@ -936,6 +936,19 @@ function RB.SendSrPlusCommand(ref, itemId, name, value, valid)
     return true
 end
 
+--[[ A player made an admin of the list, or no longer one:
+       admin REF NAME add|remove -> ok admin COUNT
+     The helper finds their raidres account from the rows they reserved
+     themselves, so the game needs only the name. ]]
+function RB.SendAdminCommand(ref, name, add)
+    if not RB.LockControlReady() or RB.HelperBusy() then return false end
+    local id = post("admin " .. ref .. " " .. name .. (add and " add" or " remove"))
+    if not id then return false end
+    RB.createPending = { id = id, admin = ref, name = name, add = add, sent = GetTime() }
+    lockTick:Show()
+    return true
+end
+
 --[[ Your saved HR lists on raidres, for the New event window: the helper
      answers "ok templates [{id, name, raid, hr}, ...]". Shares the create
      slot, so a list fetch and a create never cross. ]]
@@ -994,6 +1007,8 @@ function RB.CheckCreateResult()
         if RB.OnSuggestResult then RB.OnSuggestResult(pending, text) end
     elseif pending.srplus then
         if RB.OnSrPlusResult then RB.OnSrPlusResult(pending, text) end
+    elseif pending.admin then
+        if RB.OnAdminResult then RB.OnAdminResult(pending, text) end
     elseif RB.OnCreateResult then
         RB.OnCreateResult(pending, text)
     end

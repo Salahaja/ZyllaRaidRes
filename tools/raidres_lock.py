@@ -28,6 +28,9 @@ Usage
                                 [DESCRIPTION...] [--dry-run]
                                         a new event; switches are 0/1, the
                                         time this PC's; prints its reference
+  python raidres_lock.py admin REF NAME add|remove [--dry-run]
+                                        make NAME an admin of your list REF,
+                                        or no longer one
 """
 
 import http.client, json, os, socket, struct, sys, time, re
@@ -1048,6 +1051,75 @@ def set_srplus(words, dry=False):
         return "ok srplus"
     return reserve_line(answer)
 
+# ---------------------------------------------------------------------------
+# A player made an admin of the list, or no longer one
+#
+# PATCH /api/events/<ref> {reference, extraAdministratorUserIdentifiers}:
+# the whole list of admins, as raidres's own edit form sends it, with the one
+# added or taken out. A player is known by the raidres user-ID on the rows
+# they reserved themselves; a row made "for another player" carries the id
+# of whoever made it, so it can't say who they are.
+# ---------------------------------------------------------------------------
+
+ADMIN_LIMIT = 10        # raidres's own form takes no more
+
+_ADMIN_JS = r"""
+async (a) => {
+""" + _PAGE_HELPERS + r"""
+  if (await signedIn() == null) return answer({ result: 'signin' });
+  const ev = await get('/api/events/' + encodeURIComponent(a.ref));
+  if (!ev.ok || !ev.body) return answer({ result: 'error', message: 'raidres has no list ' + a.ref });
+  const e = ev.body;
+  if (e.isAuthor === false)
+    return answer({ result: 'error', message: "only the list's owner can change its admins" });
+  const name = a.name.toLocaleLowerCase();
+  const rows = (e.reservations || []).filter(r => r.character && r.user
+    && String(r.character.name).toLocaleLowerCase() === name);
+  const own = rows.filter(r => !r.character.isTemporary);
+  if (own.length === 0)
+    return answer({ result: 'error', message: rows.length > 0
+      ? a.name + ' was reserved for by someone else; they sign up on raidres themselves first'
+      : a.name + " isn't signed up on this list" });
+  const ids = [...new Set(own.map(r => String(r.user.id)))];
+  if (ids.length > 1)
+    return answer({ result: 'error', message: 'two raidres accounts signed up as ' + a.name });
+  const id = ids[0];
+  if (e.authorId != null && String(e.authorId) === id)
+    return answer({ result: 'error', message: a.name + ' owns the list' });
+  const now = (e.extraAdministratorUserIds || []).map(String);
+  const has = now.includes(id);
+  if (a.add && has) return answer({ result: 'error', message: a.name + ' is already an admin of it' });
+  if (!a.add && !has) return answer({ result: 'error', message: a.name + " isn't an admin of it" });
+  if (a.add && now.length >= """ + str(ADMIN_LIMIT) + r""")
+    return answer({ result: 'error', message: 'the list has ' + now.length + ' admins already, as many as raidres takes' });
+  const list = a.add ? now.concat([id]) : now.filter(x => x !== id);
+  const body = { reference: e.reference, extraAdministratorUserIdentifiers: list };
+  if (a.dry) return answer({ result: 'plan', method: 'PATCH', body });
+  const r = await send('/api/events/' + encodeURIComponent(e.reference), 'PATCH', body);
+  if (r.fail) return r.fail;
+  return answer({ result: 'ok', done: 'admin', count: list.length });
+}
+"""
+
+def set_admin(words, dry=False):
+    """admin REF NAME add|remove"""
+    if len(words) != 3 or words[2] not in ("add", "remove"):
+        return "error: bad command"
+    try:
+        ref = validate_ref(words[0])
+        name = words[1]
+        if not _NAME_RE.match(name):
+            raise ValueError("bad character name: %r" % name)
+    except ValueError as e:
+        return "error: %s" % e
+    args = {"ref": ref, "name": name, "add": words[2] == "add", "dry": bool(dry)}
+    answer, line = _page_eval(_ADMIN_JS, args, "https://raidres.top/res/%s" % ref)
+    if line:
+        return line
+    if answer.get("result") == "ok":
+        return "ok admin %d" % answer.get("count", 0)
+    return reserve_line(answer)
+
 def signin(ref):
     validate_ref(ref)
     login_url = "https://raidres.top/"
@@ -1128,6 +1200,12 @@ def run_command(line):
     if words and words[0] == "srplus":
         log("%s ..." % line)
         result = set_srplus(words[1:])
+        log("  -> %s" % result)
+        return result
+
+    if words and words[0] == "admin":
+        log("%s ..." % line)
+        result = set_admin(words[1:])
         log("  -> %s" % result)
         return result
 
@@ -1334,6 +1412,16 @@ def main():
     elif cmd == "srplus":
         dry = "--dry-run" in args
         result = set_srplus([w for w in args[1:] if w != "--dry-run"], dry=dry)
+        print(result)
+        sys.exit(0 if result.startswith(("ok", "plan")) else 1)
+
+    elif cmd == "admin":
+        dry = "--dry-run" in args
+        words = [w for w in args[1:] if w != "--dry-run"]
+        if len(words) != 3:
+            print("usage: raidres_lock.py admin REF NAME add|remove [--dry-run]")
+            sys.exit(1)
+        result = set_admin(words, dry=dry)
         print(result)
         sys.exit(0 if result.startswith(("ok", "plan")) else 1)
 
