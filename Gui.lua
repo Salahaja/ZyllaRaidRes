@@ -2220,7 +2220,9 @@ local function drawDetail(f, s, sel)
         row.itemId = it.id
         row.icon:SetTexture(icon or QMARK)
         row.icon:Show()
-        row.text:SetText(hex(qualityHex(q), name))
+        -- SR+ beside it, as raidres's own list badges it
+        local plus = tonumber(it.sr_plus) or 0
+        row.text:SetText(hex(qualityHex(q), name) .. (plus > 0 and hex(GOLD, "  +" .. plus) or ""))
         row.onRaidres = (web[it.id] and onRaidres) and true or nil
         if row.onRaidres then
             row.tag:Hide()

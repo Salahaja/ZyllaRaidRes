@@ -671,14 +671,45 @@ function RB.SendCreateCommand(e)
     if not RB.LockControlReady() or RB.HelperBusy() then return false end
     local function bit(v) return v and "1" or "0" end
     local desc = string.gsub(e.description or "", "%s+", " ")
+    -- hard reserves (a saved list, or WoW item ids) and the SR+ settings, as key=value
+    local opts = ""
+    if e.tpl then
+        opts = opts .. " tpl=" .. e.tpl
+    elseif e.hr and table.getn(e.hr) > 0 then
+        opts = opts .. " hr=" .. table.concat(e.hr, ",")
+    end
+    if e.srplus then
+        opts = opts .. " inc=" .. (e.inc or 0)
+        if e.prev then opts = opts .. " prev=" .. e.prev end
+    end
     local cmd = "create " .. e.raid .. " " .. e.day .. " " .. e.clock .. " " .. e.limit ..
         " " .. bit(e.lock) .. " " .. bit(e.comments) .. " " .. bit(e.srplus) ..
-        " " .. bit(e.dupes) .. ((desc ~= "" and desc ~= " ") and (" " .. desc) or "")
+        " " .. bit(e.dupes) .. opts .. ((desc ~= "" and desc ~= " ") and (" " .. desc) or "")
     pcall(WriteCustomFile, LOCK_RESULT, "", "w")
     if not pcall(WriteCustomFile, LOCK_CMD, cmd, "w") then return false end
     RB.createPending = { event = e, sent = GetTime() }
     lockTick:Show()
     return true
+end
+
+--[[ Your saved HR lists on raidres, for the New event window: the helper
+     answers "ok templates [{id, name, raid, hr}, ...]". Shares the create
+     slot, so a list fetch and a create never cross. ]]
+function RB.SendTemplatesCommand()
+    if not RB.LockControlReady() or RB.HelperBusy() then return false end
+    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
+    if not pcall(WriteCustomFile, LOCK_CMD, "templates", "w") then return false end
+    RB.createPending = { templates = true, sent = GetTime() }
+    lockTick:Show()
+    return true
+end
+
+-- "ok templates [...]" as a Lua list, or nil.
+function RB.ReadTemplates(text)
+    if string.sub(text, 1, 13) ~= "ok templates " then return nil end
+    local ok, list = pcall(Json.decode, string.sub(text, 14))
+    if not ok or type(list) ~= "table" then return nil end
+    return list
 end
 
 function RB.CheckCreateResult()
@@ -694,7 +725,11 @@ function RB.CheckCreateResult()
         text = got
     end
     RB.createPending = nil
-    if RB.OnCreateResult then RB.OnCreateResult(pending, text) end
+    if pending.templates then
+        if RB.OnTemplatesResult then RB.OnTemplatesResult(text) end
+    elseif RB.OnCreateResult then
+        RB.OnCreateResult(pending, text)
+    end
 end
 
 function RB.CheckLockResult()

@@ -609,18 +609,45 @@ def reserve(ref, item, name, cls, spec=None, remove=False, dry=False):
 # A new event
 #
 # POST /api/events with the fields raidres's own "Create event" form sends.
-# Its reply carries the new event's reference. What that form keeps for
-# later (hard reserves, extra admins, banned users, a previous event for
-# SR+) is sent empty, as the form sends it untouched; raidres's site edits
-# them afterwards.
+# Its reply carries the new event's reference. Hard reserves go as the form
+# sends them: advancedHrItems, by raidres's own item ids -- picked from the
+# loot (the game sends WoW ids; the raid's loot file maps them) or taken from
+# one of the user's saved lists ("raid event templates"). Extra admins and
+# banned users are left empty, for raidres's site.
 # ---------------------------------------------------------------------------
 
 _CREATE_JS = r"""
 async (a) => {
 """ + _PAGE_HELPERS + r"""
   if (await signedIn() == null) return answer({ result: 'signin' });
-  if (a.dry) return answer({ result: 'plan', method: 'POST', body: a.body });
-  const r = await send('/api/events', 'POST', a.body);
+  const body = a.body;
+  // A saved list's hard reserves, as the form loads them.
+  if (a.tpl) {
+    const t = await get('/api/raid-event-templates');
+    const list = Array.isArray(t.body) ? t.body : ((t.body && t.body.data) || []);
+    const tpl = list.find(x => x && x.id === a.tpl);
+    if (!tpl) return answer({ result: 'error', message: "that saved HR list isn't on raidres any more" });
+    if (tpl.raidId !== body.raidId) return answer({ result: 'error', message: 'that saved HR list is for another raid' });
+    body.advancedHrItems = (tpl.raidEventTemplateItems || [])
+      .filter(i => i.isHardReserved || (i.note && i.note.length > 0))
+      .map(i => ({ raidItemId: i.raidItemId, isHardReserved: !!i.isHardReserved, note: i.note || null,
+                   characterClasses: i.characterClasses || [],
+                   characterSpecializations: i.characterSpecializations || [],
+                   characterNames: i.characterNames || [] }));
+  } else if (a.hr && a.hr.length > 0) {
+    const raid = await get('/raids/raid_' + body.raidId + '.json');
+    if (!raid.ok || !raid.body) return answer({ result: 'error', message: "couldn't load the raid's loot table" });
+    const ids = [];
+    for (const g of a.hr) {
+      const it = (raid.body.raidItems || []).find(i => i.gameDbItemId === g);
+      if (!it) return answer({ result: 'error', message: 'item ' + g + " isn't in this raid's loot on raidres" });
+      ids.push(it.id);
+    }
+    body.advancedHrItems = ids.map(id => ({ raidItemId: id, isHardReserved: true, note: null,
+      characterClasses: [], characterSpecializations: [], characterNames: [] }));
+  }
+  if (a.dry) return answer({ result: 'plan', method: 'POST', body });
+  const r = await send('/api/events', 'POST', body);
   if (r.fail) return r.fail;
   const ref = r.reply && r.reply.reference;
   if (!ref) return answer({ result: 'error', message: "raidres made it but didn't say its link" });
@@ -628,17 +655,32 @@ async (a) => {
 }
 """
 
+# The user's saved HR lists, small enough for one line back to the game.
+_TEMPLATES_JS = r"""
+async (a) => {
+""" + _PAGE_HELPERS + r"""
+  if (await signedIn() == null) return answer({ result: 'signin' });
+  const t = await get('/api/raid-event-templates');
+  if (!t.ok) return answer({ result: 'error', message: 'raidres said HTTP ' + t.status });
+  const list = Array.isArray(t.body) ? t.body : ((t.body && t.body.data) || []);
+  return answer({ result: 'ok', lists: list.filter(x => x && x.id).map(x => ({
+    id: x.id, name: String(x.name || '?'), raid: x.raidId,
+    hr: (x.raidEventTemplateItems || []).filter(i => i.isHardReserved).length })) });
+}
+"""
+
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _CLOCK_RE = re.compile(r"^\d{2}:\d{2}$")
+_OPTION_RE = re.compile(r"^(hr|tpl|inc|skip|input|valid|prev)=(\S*)$")
 
 def event_body(raid_id, day, clock, limit, lock, comments, srplus, dupes, description,
-               now=None):
+               now=None, options=None):
     """The create form's fields from what the game sent; raises ValueError.
 
     The date and time are the player's own clock, as the game shows it and
     as raidres's form takes them in a browser on this same machine; raidres
     stores UTC, so they go as UTC, the way the form's toISOString() sends
-    them."""
+    them. options are the SR+ settings (inc, skip, input, valid, prev)."""
     from datetime import datetime, timezone
     try:
         raid_id, limit = int(raid_id), int(limit)
@@ -663,6 +705,16 @@ def event_body(raid_id, day, clock, limit, lock, comments, srplus, dupes, descri
     description = (description or "").strip()
     if len(description) > 500:
         raise ValueError("the description is too long")
+    o = options or {}
+    try:
+        inc, skip = int(o.get("inc", 0)), int(o.get("skip", 0))
+    except ValueError:
+        raise ValueError("bad SR+ numbers")
+    if not (0 <= inc <= 1000 and 0 <= skip <= 10):
+        raise ValueError("SR+ numbers out of range")
+    prev = o.get("prev") or None
+    if prev is not None:
+        validate_ref(prev)
     return {
         "raidId": raid_id,
         "description": description,
@@ -678,53 +730,81 @@ def event_body(raid_id, day, clock, limit, lock, comments, srplus, dupes, descri
         "minimumAccountAge": 0,
         "forbiddenUserIds": [],
         "allowSrPlus": srplus == "1",
-        "previousRaidEventReference": None,
-        "allowSrPlusInput": True,
-        "defaultSrPlusIncrease": 0,
-        "srPlusAllowEventSkipCount": 0,
-        "requireSrPlusValidation": False,
+        "previousRaidEventReference": prev if srplus == "1" else None,
+        "allowSrPlusInput": o.get("input", "1") != "0",
+        "defaultSrPlusIncrease": inc if srplus == "1" else 0,
+        "srPlusAllowEventSkipCount": skip if srplus == "1" else 0,
+        "requireSrPlusValidation": srplus == "1" and o.get("valid") == "1",
     }
 
-def create_event(words, dry=False):
-    """create RAIDID YYYY-MM-DD HH:MM LIMIT LOCK COMMENTS SRPLUS DUPES [DESCRIPTION...]"""
-    if len(words) < 8:
-        return "error: bad command"
-    try:
-        body = event_body(*(words[:8] + [" ".join(words[8:])]))
-    except ValueError as e:
-        return "error: %s" % e
-    if not ensure_chrome("https://raidres.top/"):
-        return "error: could not start Chrome"
+def split_options(words):
+    """The key=value words after the switches, then the description."""
+    options, rest = {}, list(words)
+    while rest and _OPTION_RE.match(rest[0]):
+        k, v = _OPTION_RE.match(rest.pop(0)).groups()
+        options[k] = v
+    return options, " ".join(rest)
+
+def _page_eval(script, args, url="https://raidres.top/"):
+    """Run an in-page script in a raidres tab; its answer, or an error line."""
+    if not ensure_chrome(url):
+        return None, "error: could not start Chrome"
     tab = find_raidres_tab()
     if not tab:
         log("no raidres.top tab in Chrome -- opening one")
         tab = open_raidres_tab()
         if not tab or not tab.get("webSocketDebuggerUrl"):
-            return "error: could not open a raidres tab in Chrome"
+            return None, "error: could not open a raidres tab in Chrome"
     ws = WebSocket(tab["webSocketDebuggerUrl"])
     try:
         reply = ws.call("Runtime.evaluate", {
-            "expression": "(%s)(%s)" % (_CREATE_JS, json.dumps({"body": body, "dry": bool(dry)})),
+            "expression": "(%s)(%s)" % (script, json.dumps(args)),
             "awaitPromise": True,
             "returnByValue": True,
         }, timeout=45)
         value = reply.get("result", {}).get("result", {}).get("value")
         if not isinstance(value, str):
             err = reply.get("result", {}).get("exceptionDetails", {})
-            return "error: CDP eval failed: %s" % json.dumps(err)[:200]
+            return None, "error: CDP eval failed: %s" % json.dumps(err)[:200]
         answer = json.loads(value)
-        if answer.get("result") == "ok":
-            ref = str(answer.get("reference", ""))
-            if not _REF_RE.match(ref):
-                return "error: raidres answered with a strange link: %r" % ref[:40]
-            return "ok created %s" % ref
-        line = reserve_line(answer)
-        if line == "signin":
+        if answer.get("result") == "signin":
             expiry = _format_expiry(_get_expiry(ws))
-            return "signin %s" % expiry if expiry else "signin"
-        return line
+            return None, "signin %s" % expiry if expiry else "signin"
+        return answer, None
     finally:
         ws.close()
+
+def create_event(words, dry=False):
+    """create RAIDID YYYY-MM-DD HH:MM LIMIT LOCK COMMENTS SRPLUS DUPES
+              [hr=ID,ID|tpl=ID] [inc=N] [skip=N] [input=0|1] [valid=0|1] [prev=REF]
+              [DESCRIPTION...]"""
+    if len(words) < 8:
+        return "error: bad command"
+    options, description = split_options(words[8:])
+    try:
+        body = event_body(*(words[:8] + [description]), options=options)
+        hr = [int(x) for x in options.get("hr", "").split(",") if x]
+        tpl = int(options["tpl"]) if options.get("tpl") else None
+    except ValueError as e:
+        return "error: %s" % e
+    answer, line = _page_eval(_CREATE_JS, {"body": body, "hr": hr, "tpl": tpl, "dry": bool(dry)})
+    if line:
+        return line
+    if answer.get("result") == "ok":
+        ref = str(answer.get("reference", ""))
+        if not _REF_RE.match(ref):
+            return "error: raidres answered with a strange link: %r" % ref[:40]
+        return "ok created %s" % ref
+    return reserve_line(answer)
+
+def templates():
+    """ok templates [{"id":..,"name":..,"raid":..,"hr":N},...] -- one line of JSON."""
+    answer, line = _page_eval(_TEMPLATES_JS, {})
+    if line:
+        return line
+    if answer.get("result") == "ok":
+        return "ok templates " + json.dumps(answer.get("lists", []), ensure_ascii=False)
+    return reserve_line(answer)
 
 def signin(ref):
     validate_ref(ref)
@@ -831,6 +911,13 @@ def watch(parent=None):
                 os.remove(cmd_path)
 
                 words = line.split()
+                if words == ["templates"]:
+                    result = templates()
+                    log("templates -> %s" % result[:80])
+                    with open(result_path, "w", encoding="utf-8") as f:
+                        f.write(result)
+                    continue
+
                 # create RAIDID DAY TIME LIMIT LOCK COMMENTS SRPLUS DUPES [DESCRIPTION]
                 if words and words[0] == "create":
                     log("create %s ..." % " ".join(words[1:4]))
@@ -963,6 +1050,11 @@ def main():
                          words[4] if len(words) == 5 else None, remove=remove, dry=dry)
         print(result)
         sys.exit(0 if result.startswith(("ok", "plan")) else 1)
+
+    elif cmd == "templates":
+        result = templates()
+        print(result)
+        sys.exit(0 if result.startswith("ok") else 1)
 
     elif cmd == "create":
         dry = "--dry-run" in args

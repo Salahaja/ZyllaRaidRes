@@ -94,6 +94,25 @@ for label, call in [
         check(label + " is refused", "refused", "refused")
 check("a short command is refused before Chrome", w.create_event(["95", "2026-11-02"]),
       "error: bad command")
+opts, desc = w.split_options(["hr=19137,17076", "inc=10", "prev=WW8CK7", "MC", "inc=5", "night"])
+check("options come before the description", (opts, desc),
+      ({"hr": "19137,17076", "inc": "10", "prev": "WW8CK7"}, "MC inc=5 night"))
+body = w.event_body("95", "2026-11-02", "20:00", "2", "0", "1", "1", "0", "",
+                    now=NOW, options={"inc": "10", "skip": "1", "input": "0", "valid": "1",
+                                      "prev": "WW8CK7"})
+check("SR+ settings go as raidres's form names them",
+      (body["defaultSrPlusIncrease"], body["srPlusAllowEventSkipCount"], body["allowSrPlusInput"],
+       body["requireSrPlusValidation"], body["previousRaidEventReference"]), (10, 1, False, True, "WW8CK7"))
+body = w.event_body("95", "2026-11-02", "20:00", "2", "0", "1", "0", "0", "",
+                    now=NOW, options={"inc": "10", "prev": "WW8CK7"})
+check("and are dropped with SR+ off", (body["defaultSrPlusIncrease"], body["previousRaidEventReference"]),
+      (0, None))
+try:
+    w.event_body("95", "2026-11-02", "20:00", "2", "0", "1", "1", "0", "", now=NOW,
+                 options={"prev": "../x"})
+    check("a bad carry-over list is refused", "passed", "refused")
+except ValueError:
+    check("a bad carry-over list is refused", "refused", "refused")
 
 # ------------------------------------------------------------------ in a real Chrome
 tmp = tempfile.mkdtemp(prefix="raidres-lock-test-")
@@ -110,7 +129,7 @@ if not w.start_chrome("about:blank", headless=True):
 tab = next(t for t in w.cdp_tabs() if t.get("type") == "page" and t.get("webSocketDebuggerUrl"))
 ws = w.WebSocket(tab["webSocketDebuggerUrl"])
 
-def run(args, me="1000", event=None, chars=None, reply=None, script=None):
+def run(args, me="1000", event=None, chars=None, reply=None, script=None, tpls=None):
     """Run an in-page script once against a stand-in site. Returns (answer, sent)."""
     site = {
         "me": {"status": 200, "body": {"id": me}} if me else {"status": 401, "body": None},
@@ -118,6 +137,7 @@ def run(args, me="1000", event=None, chars=None, reply=None, script=None):
         "raid": {"status": 200, "body": RAID},
         "chars": {"status": 200, "body": chars if chars is not None else []},
         "reply": reply or {"status": 201, "body": {"ok": True}},
+        "tpls": {"status": 200, "body": tpls if tpls is not None else []},
     }
     stand_in = r"""
     (site) => {
@@ -129,6 +149,7 @@ def run(args, me="1000", event=None, chars=None, reply=None, script=None):
         else if (url.startsWith('/api/events/')) r = site.event;
         else if (url.startsWith('/raids/raid_')) r = site.raid;
         else if (url === '/api/user-characters') r = site.chars;
+        else if (url === '/api/raid-event-templates') r = site.tpls;
         else if (url === '/api/events' || url.startsWith('/api/raid-event-reservations')) {
           window.__sent.push({ url, method: opts.method, body: JSON.parse(opts.body) });
           r = site.reply;
@@ -261,6 +282,35 @@ try:
     answer, sent = run({"body": body, "dry": False}, script=w._CREATE_JS,
                        reply={"status": 201, "body": {}})
     check("a reply with no link says so", answer["message"], "raidres made it but didn't say its link")
+
+    print("hard reserves on a new event")
+    two = [RAID["raidItems"][0], RAID["raidItems"][5]]
+    answer, sent = run({"body": copy.deepcopy(body) | {"raidId": 100}, "hr": [two[0]["gameDbItemId"], two[1]["gameDbItemId"]],
+                        "dry": False}, script=w._CREATE_JS, reply={"status": 201, "body": {"reference": "HR0001"}})
+    hr = sent[0]["body"]["advancedHrItems"]
+    check("picked items go by raidres's own ids", [h["raidItemId"] for h in hr], [two[0]["id"], two[1]["id"]])
+    check("as hard reserves, the form's shape",
+          (hr[0]["isHardReserved"], hr[0]["note"], hr[0]["characterNames"]), (True, None, []))
+    answer, sent = run({"body": copy.deepcopy(body) | {"raidId": 100}, "hr": [999999], "dry": False},
+                       script=w._CREATE_JS)
+    check("an item not in the raid is refused", (answer.get("message"), sent),
+          ("item 999999 isn't in this raid's loot on raidres", []))
+    saved = [{"id": 7, "name": "ZG HRs", "raidId": 100, "raidEventTemplateItems": [
+        {"id": 1, "raidItemId": two[0]["id"], "isHardReserved": True, "note": None},
+        {"id": 2, "raidItemId": two[1]["id"], "isHardReserved": False, "note": "MS > OS"},
+        {"id": 3, "raidItemId": 4242, "isHardReserved": False, "note": None}]}]
+    answer, sent = run({"body": copy.deepcopy(body) | {"raidId": 100}, "tpl": 7, "dry": False},
+                       script=w._CREATE_JS, tpls=saved, reply={"status": 201, "body": {"reference": "HR0002"}})
+    hr = sent[0]["body"]["advancedHrItems"]
+    check("a saved list brings its HRs and notes, as the form loads it",
+          [(h["raidItemId"], h["isHardReserved"], h["note"]) for h in hr],
+          [(two[0]["id"], True, None), (two[1]["id"], False, "MS > OS")])
+    check("without the saved list's own row ids", "id" in hr[0], False)
+    answer, sent = run({"body": copy.deepcopy(body) | {"raidId": 95}, "tpl": 7, "dry": False},
+                       script=w._CREATE_JS, tpls=saved)
+    check("a saved list for another raid is refused", answer.get("message"), "that saved HR list is for another raid")
+    answer, sent = run({}, script=w._TEMPLATES_JS, tpls=saved)
+    check("the saved lists, small", answer, {"result": "ok", "lists": [{"id": 7, "name": "ZG HRs", "raid": 100, "hr": 1}]})
 finally:
     ws.close()
     w.kill_chrome()

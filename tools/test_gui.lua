@@ -1428,6 +1428,11 @@ check("with it, the Recent menu ends with a new event", plain(newEntry.text), "N
 check("ready to pick", newEntry.disabled, nil)
 pick(newEntry)
 local ev = RB.eventFrame
+check("opening asks raidres for your saved HR lists", FILES["RaidResBridge_lock_cmd.txt"], "templates")
+FILES["RaidResBridge_lock_result.txt"] = 'ok templates [{"id":7,"name":"BWL HRs","raid":94,"hr":2},' ..
+    '{"id":8,"name":"ZG HRs","raid":100,"hr":1}]'
+run(1)
+check("and keeps them", RB.savedLists and table.getn(RB.savedLists), 2)
 check("which opens the dialog", ev and ev:IsVisible(), true)
 check("titled on the dialog header", ev and ev.title:GetText(), "New raidres event")
 local escapes = false
@@ -1457,13 +1462,48 @@ pick(entry(openMenu(ev.minute), 30))
 pick(entry(openMenu(ev.limit), 2))
 ev.lock:SetChecked(1)
 fire(ev.lock, "OnClick")
+
+print("a new event: hard reserves and SR+")
+check("no hard reserves to begin with", ev.hr.ddText, "None")
+local hrMenu = openMenu(ev.hr)
+local hrText = {}
+for _, info in ipairs(hrMenu) do table.insert(hrText, plain(info.text)) end
+check("your saved lists for this raid, then the bosses to pick from",
+    string.find(table.concat(hrText, "|"), "None|Your saved lists|BWL HRs  2 HR|Pick items|", 1, true) == 1, true)
+check("not another raid's list", string.find(table.concat(hrText, "|"), "ZG HRs", 1, true), nil)
+local firstBoss = nil
+for _, info in ipairs(hrMenu) do if info.hasArrow then firstBoss = firstBoss or info end end
+check("each boss opens its loot", firstBoss and firstBoss.hasArrow, 1)
+UIDROPDOWNMENU_MENU_LEVEL, UIDROPDOWNMENU_MENU_VALUE = 2, firstBoss.value
+local loot = openMenu(ev.hr)
+check("ticked one by one, the menu staying open", loot[1] and loot[1].keepShownOnClick, 1)
+pick(loot[1])
+pick(loot[2])
+UIDROPDOWNMENU_MENU_LEVEL, UIDROPDOWNMENU_MENU_VALUE = nil, nil
+check("two picked", ev.hr.ddText, "2 items")
+local hrIds = loot[1].value .. "," .. loot[2].value
+UIDROPDOWNMENU_MENU_LEVEL, UIDROPDOWNMENU_MENU_VALUE = 2, firstBoss.value
+pick(openMenu(ev.hr)[2])
+UIDROPDOWNMENU_MENU_LEVEL, UIDROPDOWNMENU_MENU_VALUE = nil, nil
+check("ticking one again takes it off", ev.hr.ddText, "1 item")
+hrIds = tostring(loot[1].value)
+check("SR+ settings hide while SR+ is off", ev.inc:IsShown(), false)
+ev.srplus:SetChecked(1)
+fire(ev.srplus, "OnClick")
+check("and show with it on", ev.inc:IsShown(), true)
+check("10 a time to start", ev.inc.ddText, "+10")
+pick(entry(openMenu(ev.inc), 20))
+local prevMenu = openMenu(ev.prev)
+check("carried from nothing, or one of your lists for this raid", plain(prevMenu[1].text), "Start fresh")
+ev.srplus:SetChecked(nil)
+fire(ev.srplus, "OnClick")
 ev.desc:SetText("BWL night, bring an Onyxia cloak")
 local CMD, RESULT = "RaidResBridge_lock_cmd.txt", "RaidResBridge_lock_result.txt"
 FILES[CMD] = nil
 click(ev.create)
 local tomorrow = os.date("%Y-%m-%d", CLOCK + 86400)
 check("Create sends the form to the helper", FILES[CMD],
-    "create 94 " .. tomorrow .. " 19:30 2 1 1 0 0 BWL night, bring an Onyxia cloak")
+    "create 94 " .. tomorrow .. " 19:30 2 1 1 0 0 hr=" .. hrIds .. " BWL night, bring an Onyxia cloak")
 check("and says it's working on it", plain(ev.status:GetText()), "Creating it on raidres...")
 check("not twice", ev.create.enabled, false)
 
@@ -1495,7 +1535,14 @@ click(ev.create)
 check("a time already gone is refused here", plain(ev.status:GetText()), "That time has already passed.")
 check("and nothing is sent", FILES[CMD], nil)
 pick(days[3])
+pick(entry(openMenu(ev.hr), 7))
+check("a saved list can be picked", ev.hr.ddText, "Saved: BWL HRs")
+ev.srplus:SetChecked(1)
+fire(ev.srplus, "OnClick")
+FILES[CMD] = nil
 click(ev.create)
+check("it goes by its id, with the SR+ settings",
+    string.find(FILES[CMD] or "", " 1 0 tpl=7 inc=20 BWL night", 1, true) ~= nil, true)
 FILES[RESULT] = "error: Start time must be in the future"
 run(1)
 check("raidres's refusal shows in the dialog, in its words",
@@ -1539,6 +1586,22 @@ check("the group names can't be picked", openMenu(ev.raid)[1].isTitle, 1)
 SlashCmdList.RAIDRESBRIDGE("new")
 run(1)
 check("and asked for once a session", table.getn(ASKED), 1)
+
+-- ================================================================== SR+ in the window
+print("SR+ beside each reserve")
+RB = world()
+loadstring(slurp(DIR .. "RaidResBridge_data.lua"))()
+local srList = RaidResBridge_Data
+srList.softreserves[1].items[1].sr_plus = 30
+RB.fetched = { unsaved = true, ref = "DEMO42", data = srList }
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+local srName = srList.softreserves[1].name
+click(findRow(f.pRows, srName) or (function()
+    RB.player = srName; RB.Draw(); return nil end)())
+if RB.player ~= srName then RB.player = srName; RB.Draw() end
+check("a reserve with SR+ says how much", string.find(plain(f.dRows[1].text:GetText()), "  +30", 1, true) ~= nil, true)
+check("one without says nothing", string.find(plain(f.dRows[2].text:GetText() or ""), "+", 1, true), nil)
 
 -- ================================================================== the minimap button
 print("the minimap button")
@@ -1637,7 +1700,7 @@ local buttonsBefore = CALLS.SkinButton
 SlashCmdList.RAIDRESBRIDGE("new")
 check("the New event dialog takes pfUI's look too", RB.eventFrame and RB.eventFrame.pfui, true)
 check("its own buttons, not the window's again", CALLS.SkinButton - buttonsBefore, 2)
-check("its five dropdowns", CALLS.SkinDropDown, 1 + 5)
+check("its eight dropdowns", CALLS.SkinDropDown, 1 + 8)
 check("its four checkboxes", CALLS.SkinCheckbox, 2 + 4)
 check("without the Blizzard banner", RB.eventFrame.header:IsShown(), false)
 RB.eventFrame:Hide()

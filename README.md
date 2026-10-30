@@ -512,14 +512,18 @@ the link box, or from the minimap button's menu. It asks for what raidres's own
 - **Lock at the start time**, **Allow comments**, **Use SR+**, and **Same item
   twice**.
 - **Description.**
+- **Hard reserves**: one of your saved HR lists on raidres for that raid, or
+  items ticked boss by boss from the raid's loot.
+- **SR+ each event** and **from**: with SR+ on, how much each event adds, and
+  which of your recent lists for the same raid SR+ carries over from.
 
 **Create event** makes it. The new link goes into the window's box and is
 fetched, and you're asked whether to post it in raid (or party) chat as one
 line. Anyone else running the addon gets it as a clickable link. The choices
 are remembered for next time.
 
-Hard reserves, extra admins and banned users are left to raidres's site: each
-is a list to manage there, not a field here. A time already gone is refused
+Extra admins and banned users are left to raidres's site: each is a list to
+manage there, not a field here. A time already gone is refused
 before anything is sent. Anything raidres refuses comes back in its own words,
 and the dialog stays open to fix it.
 
@@ -554,9 +558,9 @@ failure.
 
 ```bash
 lua tools/test_bridge.lua   # lists, the merge, typed reserves, names   (139)
-lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (118)
-lua tools/test_gui.lua      # the window, minimap, RollFor box, events  (444)
-python tools/test_lock.py   # reserving and events, in a throwaway Chrome (60)
+lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (121)
+lua tools/test_gui.lua      # the window, minimap, RollFor box, events  (461)
+python tools/test_lock.py   # reserving and events, in a throwaway Chrome (71)
 lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Event.lua Minimap.lua Chat.lua
 ```
 

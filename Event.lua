@@ -21,7 +21,7 @@
 local RB = RaidResBridge
 local UI            -- RB.UI, once Gui.lua has made it
 
-local W, H = 360, 344
+local W, H = 360, 420
 local EDGE = 20
 local COL = EDGE + 88       -- where the controls start, after their labels
 
@@ -38,6 +38,7 @@ local KINDS = {
 local MINUTES = { 0, 15, 30, 45 }
 local DAYS = 14
 local MOST = 6              -- reserves each, at most, on offer here
+local INCREASES = { 0, 5, 10, 15, 20, 25, 50 }   -- SR+ added each event
 
 local function say(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff8fd3ffRaidRes|r: " .. msg)
@@ -115,7 +116,13 @@ local function picked()
     RB.DrawNewEvent()
 end
 
-local function onPickRaid() form().raid = this.value; picked() end
+local function onPickRaid()
+    local e = form()
+    -- another raid's loot can't be hard-reserved here
+    if e.raid ~= this.value then e.hr, e.tpl, e.tplName, e.prev = {}, nil, nil, nil end
+    e.raid = this.value
+    picked()
+end
 local function onPickDay() form().day = this.value; picked() end
 local function onPickHour() form().hour = this.value; picked() end
 local function onPickMinute() form().minute = this.value; picked() end
@@ -172,6 +179,146 @@ function RB.InitEventLimitMenu()
 end
 
 -- ---------------------------------------------------------------------------
+-- Hard reserves: none, one of your saved lists, or items picked boss by boss
+-- ---------------------------------------------------------------------------
+
+-- The chosen raid's cached loot, by boss, in the loot table's order.
+local function bosses(raidId)
+    local raid = (RaidResBridge_Raids or {})[raidId]
+    local out, at = {}, {}
+    for _, it in ipairs(raid and raid.items or {}) do
+        local b = it.b or ""
+        if not at[b] then
+            at[b] = { name = (b ~= "" and b) or "Elsewhere", items = {} }
+            table.insert(out, at[b])
+        end
+        table.insert(at[b].items, it)
+    end
+    return out
+end
+
+local function hrHas(e, id)
+    for _, g in ipairs(e.hr) do if g == id then return true end end
+    return false
+end
+
+local function onPickHrNone()
+    local e = form()
+    e.tpl, e.tplName, e.hr = nil, nil, {}
+    picked()
+end
+
+local function onPickHrList()
+    local e = form()
+    e.tpl, e.hr = this.value, {}
+    for _, l in ipairs(RB.savedLists or {}) do
+        if l.id == this.value then e.tplName = l.name end
+    end
+    picked()
+end
+
+-- An item ticked or unticked; the menu stays open for the next one.
+local function onToggleHrItem()
+    local e = form()
+    e.tpl, e.tplName = nil, nil
+    local id = this.value
+    if hrHas(e, id) then
+        for i = table.getn(e.hr), 1, -1 do
+            if e.hr[i] == id then table.remove(e.hr, i) end
+        end
+    else
+        table.insert(e.hr, id)
+    end
+    RB.DrawNewEvent()
+end
+
+--[[ Level 1: none, your saved lists for this raid, then each boss with an
+     arrow; level 2: that boss's loot, ticked as hard reserves. 1.12 hands
+     the level and the opened entry's value over in globals. ]]
+function RB.InitEventHrMenu()
+    local e = form()
+    if not e then return end
+    local level = UIDROPDOWNMENU_MENU_LEVEL or 1
+    if level == 2 then
+        local b = bosses(e.raid)[UIDROPDOWNMENU_MENU_VALUE or 0]
+        for _, it in ipairs(b and b.items or {}) do
+            local info = {}
+            info.text = it.n
+            info.value = it.g
+            info.func = onToggleHrItem
+            info.checked = hrHas(e, it.g) and 1 or nil
+            info.keepShownOnClick = 1
+            UIDropDownMenu_AddButton(info, 2)
+        end
+        return
+    end
+    add("None", "none", onPickHrNone, not e.tpl and table.getn(e.hr) == 0)
+    add("Your saved lists")
+    local any = false
+    for _, l in ipairs(RB.savedLists or {}) do
+        if l.raid == e.raid then
+            any = true
+            add(l.name .. UI.hex(UI.GREY, "  " .. (l.hr or 0) .. " HR"), l.id, onPickHrList, e.tpl == l.id)
+        end
+    end
+    if not any then
+        local info = {}
+        info.text = RB.savedLists and "None for this raid" or "Asking raidres..."
+        info.disabled = 1
+        UIDropDownMenu_AddButton(info)
+    end
+    add("Pick items")
+    local list = bosses(e.raid)
+    if table.getn(list) == 0 then
+        local info = {}
+        info.text = "Get the loot tables first"
+        info.disabled = 1
+        UIDropDownMenu_AddButton(info)
+    end
+    for i = 1, table.getn(list) do
+        local info = {}
+        info.text = list[i].name
+        info.value = i
+        info.hasArrow = 1
+        info.notClickable = 1
+        UIDropDownMenu_AddButton(info)
+    end
+end
+
+function RB.OnTemplatesResult(text)
+    RB.savedLists = RB.ReadTemplates(text) or RB.savedLists
+    if not RB.savedLists and string.sub(text, 1, 6) == "signin" then RB.sessionExpired = true end
+    RB.DrawNewEvent()
+end
+
+-- ---------------------------------------------------------------------------
+-- SR+: how much each event adds, and the list it carries over from
+-- ---------------------------------------------------------------------------
+
+local function onPickInc() form().inc = this.value; picked() end
+local function onPickPrev()
+    form().prev = (this.value ~= "none") and this.value or nil
+    picked()
+end
+
+function RB.InitEventIncMenu()
+    local e = form()
+    if not e then return end
+    for _, n in ipairs(INCREASES) do add("+" .. n, n, onPickInc, n == e.inc) end
+end
+
+-- None, or one of your recent lists for the same raid: SR+ carries from it.
+function RB.InitEventPrevMenu()
+    local e = form()
+    if not e then return end
+    add("Start fresh", "none", onPickPrev, not e.prev)
+    local name = e.raid and raidName(e.raid)
+    for _, r in ipairs(RaidResBridge_Recent or {}) do
+        if name and r.place == name then add(r.ref, r.ref, onPickPrev, e.prev == r.ref) end
+    end
+end
+
+-- ---------------------------------------------------------------------------
 -- Building it
 -- ---------------------------------------------------------------------------
 
@@ -197,6 +344,7 @@ local function toggle(f, name, text, field, tipText, y)
     c.field = field
     c:SetScript("OnClick", function()
         form()[this.field] = this:GetChecked() and true or false
+        RB.DrawNewEvent()       -- SR+ shows or hides its own row
     end)
     c.tipText = tipText
     c:SetScript("OnEnter", function()
@@ -258,23 +406,34 @@ local function build()
     label(f, "Reserves each", -120)
     f.limit = dropdown(f, "ZyllaRaidResEventLimit", 36, RB.InitEventLimitMenu, COL, -120)
 
-    f.lock = toggle(f, "ZyllaRaidResEventLock", "Lock at the start time", "lock",
-        "raidres locks the list itself when the raid starts, so nobody changes a reserve mid-raid.", -150)
-    f.comments = toggle(f, "ZyllaRaidResEventComments", "Allow comments", "comments",
-        "People can add a note to their reserve.", -174)
-    f.srplus = toggle(f, "ZyllaRaidResEventSrPlus", "Use SR+", "srplus",
-        "Reserving the same item event after event earns extra on the roll.", -198)
-    f.dupes = toggle(f, "ZyllaRaidResEventDupes", "Same item twice", "dupes",
-        "One person may reserve the same item more than once.", -222)
+    label(f, "Hard reserves", -152)
+    f.hr = dropdown(f, "ZyllaRaidResEventHR", 200, RB.InitEventHrMenu, COL, -152)
 
-    label(f, "Description", -252)
+    f.lock = toggle(f, "ZyllaRaidResEventLock", "Lock at the start time", "lock",
+        "raidres locks the list itself when the raid starts, so nobody changes a reserve mid-raid.", -184)
+    f.comments = toggle(f, "ZyllaRaidResEventComments", "Allow comments", "comments",
+        "People can add a note to their reserve.", -208)
+    f.srplus = toggle(f, "ZyllaRaidResEventSrPlus", "Use SR+", "srplus",
+        "Reserving the same item event after event earns extra on the roll.", -232)
+    f.dupes = toggle(f, "ZyllaRaidResEventDupes", "Same item twice", "dupes",
+        "One person may reserve the same item more than once.", -256)
+
+    -- shown only with SR+ on: what each event adds, and where it carries from
+    f.srLabel = label(f, "SR+ each event", -288)
+    f.inc = dropdown(f, "ZyllaRaidResEventInc", 40, RB.InitEventIncMenu, COL, -288)
+    f.fromLabel = UI.text(f, "GameFontNormalSmall")
+    f.fromLabel:SetPoint("TOPLEFT", f, "TOPLEFT", COL + 76, -288)
+    f.fromLabel:SetText("from")
+    f.prev = dropdown(f, "ZyllaRaidResEventPrev", 100, RB.InitEventPrevMenu, COL + 104, -288)
+
+    label(f, "Description", -322)
     f.desc = UI.editBox(f, "ZyllaRaidResEventDesc", W - COL - EDGE - 4, "Optional")
-    f.desc:SetPoint("TOPLEFT", f, "TOPLEFT", COL + 4, -248)
+    f.desc:SetPoint("TOPLEFT", f, "TOPLEFT", COL + 4, -318)
     f.desc:SetMaxLetters(200)
     f.desc:SetScript("OnEnterPressed", function() this:ClearFocus() end)
 
     f.status = UI.text(f, "GameFontHighlightSmall")
-    f.status:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, -280)
+    f.status:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, -350)
     f.status:SetWidth(W - EDGE * 2 - 8)
     f.status:SetHeight(24)
 
@@ -314,6 +473,19 @@ function RB.DrawNewEvent()
     f.comments:SetChecked(e.comments)
     f.srplus:SetChecked(e.srplus)
     f.dupes:SetChecked(e.dupes)
+    local hr = "None"
+    if e.tpl then
+        hr = "Saved: " .. (e.tplName or "?")
+    elseif table.getn(e.hr) > 0 then
+        hr = table.getn(e.hr) .. (table.getn(e.hr) == 1 and " item" or " items")
+    end
+    UIDropDownMenu_SetText(hr, f.hr)
+    UIDropDownMenu_SetText("+" .. e.inc, f.inc)
+    UIDropDownMenu_SetText(e.prev or "Start fresh", f.prev)
+    local sr = { f.srLabel, f.inc, f.fromLabel, f.prev }
+    for i = 1, table.getn(sr) do
+        if e.srplus then sr[i]:Show() else sr[i]:Hide() end
+    end
     if RB.createPending or not e.raid then f.create:Disable() else f.create:Enable() end
 end
 
@@ -343,9 +515,14 @@ function RB.OpenNewEvent()
         comments = (last.comments == nil) and true or last.comments,
         srplus = last.srplus or false,
         dupes = last.dupes or false,
+        hr = {},                -- hard reserves are picked fresh each event
+        inc = last.inc or 10,
+        prev = nil,
     }
     f.desc:SetText(last.description or "")
     note("")
+    -- your saved HR lists, through the helper, once a session
+    if not RB.savedLists and not RB.HelperBusy() then RB.SendTemplatesCommand() end
     -- raidres's own raid list, grouped; quietly, once a session
     if RB.Http and RB.Http() and not RB.raidList and not RB.eventRaidsAsked then
         RB.eventRaidsAsked = true
@@ -383,7 +560,7 @@ function RB.CreateEvent()
     local sent = RB.SendCreateCommand({
         raid = e.raid, day = e.day, clock = clock, limit = e.limit, lock = e.lock,
         comments = e.comments, srplus = e.srplus, dupes = e.dupes, description = desc,
-        name = raidName(e.raid),
+        name = raidName(e.raid), tpl = e.tpl, hr = e.hr, inc = e.inc, prev = e.prev,
     })
     if not sent then
         note("Can't reach the lock script. Is Nampower loaded?", UI.RED)
@@ -392,7 +569,7 @@ function RB.CreateEvent()
     local last = remembered()
     last.raid, last.day, last.hour, last.minute = e.raid, e.day, e.hour, e.minute
     last.limit, last.lock, last.comments = e.limit, e.lock, e.comments
-    last.srplus, last.dupes, last.description = e.srplus, e.dupes, desc
+    last.srplus, last.dupes, last.description, last.inc = e.srplus, e.dupes, desc, e.inc
     note("Creating it on raidres...", UI.GOLD)
     RB.DrawNewEvent()
 end
