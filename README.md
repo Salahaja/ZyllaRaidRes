@@ -599,7 +599,7 @@ failure.
 ```bash
 lua tools/test_bridge.lua   # lists, the merge, typed reserves, names   (139)
 lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (134)
-lua tools/test_gui.lua      # the window, minimap, RollFor box, events  (547)
+lua tools/test_gui.lua      # the window, minimap, RollFor box, events  (550)
 python tools/test_lock.py   # reserving and events, in a throwaway Chrome (96)
 lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Event.lua Minimap.lua Chat.lua
 ```

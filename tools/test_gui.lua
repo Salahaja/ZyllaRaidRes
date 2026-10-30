@@ -1895,16 +1895,22 @@ RB.AddPlayerNamed("wiredbro")
 check("then their class", f.classMenu.ddOpen, true)
 pick(entry(MENU, "WARRIOR"))
 check("added, ticked and picked", RB.player .. " " .. tostring(RB.forOthers.wiredbro), "Wiredbro true")
+check("then their spec, from raidres's list for that class", MENU[1] and plain(MENU[1].text),
+    "Wiredbro's warrior spec on raidres")
+pick(entry(MENU, "WarriorFury"))
+check("kept for next time", RaidResBridge_Spec.wiredbro, "WarriorFury")
 check("and on the list", findRow(f.pRows, "Wiredbro") ~= nil or (function()
     for _, p in ipairs(f.snap.players) do if p.name == "Wiredbro" then return true end end
     return false end)(), true)
-RaidResBridge_Spec.wiredbro = "WarriorFury"
 FILES[CMD4] = nil
 click(firstItemRow(f))
 check("their picks go to raidres with their class and spec",
     string.find(FILES[CMD4] or "", " Wiredbro Warrior WarriorFury", 1, true) ~= nil, true)
 FILES[RESULT4] = "ok reserved WarriorFury"
 run(1)
+
+RB.extraPlayers = nil
+check("next session, their class comes back from the spec kept", RB.ClassOf("Wiredbro"), "WARRIOR")
 
 print("and not for yourself, or without the helper")
 fire(findRow(f.pRows, "Tester"), "OnClick", "RightButton")

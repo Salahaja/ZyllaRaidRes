@@ -712,7 +712,9 @@ local function onPickSpec()
     RB.askSpec = nil
     RaidResBridge_Spec = RaidResBridge_Spec or {}
     RaidResBridge_Spec[key(ask.name)] = this.value
-    if ask.other then
+    if not ask.item then
+        RB.Draw()
+    elseif ask.other then
         RB.ReserveForOther(ask.item, false, this.value)
     else
         RB.ReserveOnRaidres(ask.item, false, this.value)
@@ -782,11 +784,21 @@ end
 
 RB.forOthers = RB.forOthers or {}       -- key(name) -> their clicks go to raidres
 
--- A player's class token: the raid's roster, or whoever was added here.
+--[[ A player's class token: whoever was added here, else the spec kept for
+     them last time -- raidres names a spec after its class, "WarriorFury" --
+     else the raid's roster. ]]
 function RB.ClassOf(name)
     local k = key(name)
     local x = RB.extraPlayers and RB.extraPlayers[k]
     if x then return x.class end
+    local spec = RaidResBridge_Spec and RaidResBridge_Spec[k]
+    if spec then
+        for token, list in pairs(SPECS) do
+            for i = 1, table.getn(list) do
+                if list[i] == spec then return token end
+            end
+        end
+    end
     for _, r in ipairs(RB.Roster()) do
         if key(r.name) == k then return r.class end
     end
@@ -933,6 +945,12 @@ local function onPickAddClass()
     RB.forOthers[key(name)] = true
     RB.player = name
     RB.Refresh()
+    -- a different class makes the spec kept for them meaningless
+    local kept = RaidResBridge_Spec and RaidResBridge_Spec[key(name)]
+    if kept and string.find(kept, "^" .. raidresClass(this.value)) then return end
+    if RaidResBridge_Spec then RaidResBridge_Spec[key(name)] = nil end
+    RB.askSpec = { name = name, other = true, class = this.value }
+    ToggleDropDownMenu(1, nil, RB.gui.specMenu, "cursor")
 end
 
 function RB.AddPlayerNamed(text)
