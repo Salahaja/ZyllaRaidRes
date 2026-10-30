@@ -1944,8 +1944,64 @@ local function onPickSort()
     RB.SetLootSort(this.value)
 end
 
+--[[ A menu whose ticks stay open shows every tick as it now is, a frame
+     after the click. The client flips only the one clicked, and after its
+     func has run, so "All bosses", or Class when one of its classes is
+     ticked, would keep a stale tick until reopened. Only while `menu` is
+     still the one open; an entry `state` returns nil for is left alone. ]]
+local retick = CreateFrame("Frame")
+retick:Hide()
+retick:SetScript("OnUpdate", function()
+    this:Hide()
+    local menu, state = this.menu, this.state
+    this.menu, this.state = nil, nil
+    if not menu or UIDROPDOWNMENU_OPEN_MENU ~= menu:GetName() then return end
+    for level = 1, 2 do
+        local list = getglobal("DropDownList" .. level)
+        if list and list:IsVisible() then
+            for i = 1, (list.numButtons or 0) do
+                local b = getglobal("DropDownList" .. level .. "Button" .. i)
+                local mark = b and getglobal(b:GetName() .. "Check")
+                local on = mark and state(b.value)
+                if on ~= nil then
+                    b.checked = on and 1 or nil
+                    if on then mark:Show() else mark:Hide() end
+                end
+            end
+        end
+    end
+end)
+
+local function retickLater(menu, state)
+    retick.menu, retick.state = menu, state
+    retick:Show()
+end
+
+-- Bosses' entries: All bosses, or one of the shown raid's groups.
+local function bossTicked(value)
+    local set = RB.LootBosses(RB.raid)
+    if value == "*all" then return not set end
+    for _, g in ipairs(RB.LootGroups(RB.raid)) do
+        if g.key == value then return (set and set[value]) and true or false end
+    end
+    return nil
+end
+
+-- Show's entries: All items, a kind, or one of Class's classes.
+local function showTicked(value)
+    local show = RB.LootShow()
+    if value == "all" then return not next(show) end
+    if type(value) ~= "string" then return nil end
+    if string.find(value, "^cls:") then return show[value] and true or false end
+    for i = 1, table.getn(KINDS) do
+        if KINDS[i][1] == value then return show[value] and true or false end
+    end
+    return nil
+end
+
 local function onPickBoss()
     RB.ToggleLootBoss(RB.raid, this.value)
+    retickLater(RB.gui.lootBossMenu, bossTicked)
 end
 
 local function onPickShow()
@@ -1954,6 +2010,7 @@ local function onPickShow()
         RB.FetchLoot()
     else
         RB.ToggleLootShow(this.value)
+        retickLater(RB.gui.lootShowMenu, showTicked)
     end
 end
 
@@ -1975,9 +2032,6 @@ function RB.InitLootSortMenu()
     end
 end
 
---[[ Ticks stay open, so several kinds can be picked in one go, as on
-     raidres. A loot table cached before kinds were kept can't be filtered
-     by kind: the menu says so and offers the update. ]]
 --[[ All bosses, then the shown raid's own bosses in kill order, its trash
      and its shared loot, as raidres heads them. Ticks stay open, so two can
      be picked in one go. ]]
@@ -2004,6 +2058,9 @@ function RB.InitLootBossMenu()
     end
 end
 
+--[[ Ticks stay open, so several kinds can be picked in one go, as on
+     raidres. A loot table cached before kinds were kept can't be filtered
+     by kind: the menu says so and offers the update. ]]
 function RB.InitLootShowMenu()
     local show = RB.LootShow()
     -- level 2: Class's classes, in their colours
@@ -3149,7 +3206,10 @@ local function drawLoot(f, s, sel)
         -- kept short: the Bosses, Sort and Show buttons share its line
         or (RB.raidWhy == "group" and ("  raid: " .. (RB.raidCount or 1) .. " here"))
         or (RB.raidWhy == "list" and "  the list's raid") or ""))
-    UIDropDownMenu_SetSelectedValue(f.raidDrop, RB.raid)
+    -- The field alone: 1.12's UIDropDownMenu_SetSelectedValue also redraws
+    -- the ticks of whatever menu is open, and every tick in Bosses or Show
+    -- would vanish at a click. The raid menu ticks its own from RB.raid.
+    f.raidDrop.selectedValue = RB.raid
     UIDropDownMenu_SetText(raid.name, f.raidDrop)
 
     local sort, show = RB.LootSort(), RB.LootShow()

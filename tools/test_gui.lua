@@ -165,12 +165,30 @@ local MENU, MENU_CLOSED = {}, false
 UIDropDownMenu_SetWidth = function(w, frame) frame.ddWidth = w end
 UIDropDownMenu_Initialize = function(frame, fn) frame.ddInit = fn end
 UIDropDownMenu_SetText = function(t, frame) frame.ddText = t end
-UIDropDownMenu_SetSelectedValue = function(frame, v) frame.ddValue = v end
+-- As the client's: it also redraws the ticks of whatever menu is open,
+-- whichever dropdown that menu belongs to, ticking only `v`.
+UIDropDownMenu_SetSelectedValue = function(frame, v)
+    frame.selectedValue = v
+    for _, info in ipairs(MENU) do info.checked = (info.value == v) and 1 or nil end
+    local list = NAMED["DropDownList1"]
+    if list and list:IsVisible() then
+        for i = 1, (list.numButtons or 0) do
+            local b = NAMED["DropDownList1Button" .. i]
+            if b.value == v then NAMED[b:GetName() .. "Check"]:Show()
+            else NAMED[b:GetName() .. "Check"]:Hide() end
+        end
+    end
+end
 UIDropDownMenu_JustifyText = function() end
 UIDropDownMenu_AddButton = function(info) table.insert(MENU, info) end
 CloseDropDownMenus = function() MENU_CLOSED = true end
 -- ToggleDropDownMenu(level, value, frame, anchor): opening a menu builds it.
-ToggleDropDownMenu = function(_, _, frame) MENU = {}; frame.ddInit(); frame.ddOpen = true end
+ToggleDropDownMenu = function(_, _, frame)
+    MENU = {}
+    frame.ddInit()
+    frame.ddOpen = true
+    UIDROPDOWNMENU_OPEN_MENU = frame:GetName()
+end
 local function openMenu(dd)
     MENU = {}
     dd.ddInit()
@@ -616,7 +634,7 @@ check("with the current one ticked", checked, "Zul'Gurub")
 check("and the download at the bottom", menu[table.getn(menu)].value, "loot")
 pick(menu[1])
 check("choosing one switches the loot", f.raidDrop.ddText, "Blackwing Lair")
-check("and selects it in the dropdown", f.raidDrop.ddValue, 94)
+check("and selects it in the dropdown", f.raidDrop.selectedValue, 94)
 -- A new list brings its own raid back.
 FILES["RaidResBridge_data.lua"] = string.gsub(FILES["RaidResBridge_data.lua"], "DEMO42", "DEMO43")
 RB.Refresh()
@@ -788,6 +806,81 @@ do
     pick(menuValue("*all"))
     check("All bosses clears them", RaidResBridge_Options.lootBosses, nil)
     check("a long name fits", RB.Fit("Basalthar & Smoldaris", 14), "Basalthar &...")
+
+    print("ticks in a menu kept open stay true")
+    -- The client's open list at `level`: one button per entry the menu
+    -- built, each with its Check, as UIDropDownMenu_AddButton leaves them.
+    local function shownList(level)
+        local lname = "DropDownList" .. level
+        local list = NAMED[lname] or CreateFrame("Frame", lname)
+        list:Show()
+        list.numButtons = table.getn(MENU)
+        for i, info in ipairs(MENU) do
+            local name = lname .. "Button" .. i
+            local b = NAMED[name] or CreateFrame("Button", name, list)
+            local mark = NAMED[name .. "Check"] or b:CreateTexture(name .. "Check")
+            b.value, b.func, b.keep, b.checked = info.value, info.func, info.keepShownOnClick, info.checked
+            if info.checked then mark:Show() else mark:Hide() end
+        end
+    end
+    local function buttonOf(level, value)
+        local list = NAMED["DropDownList" .. level]
+        for i = 1, list.numButtons do
+            local b = NAMED["DropDownList" .. level .. "Button" .. i]
+            if b.value == value then return b end
+        end
+    end
+    -- A click as the client makes it: the func first, then the clicked tick
+    -- flipped, as the menu stays open; then a frame passes.
+    local function clickInList(level, value)
+        local b = buttonOf(level, value)
+        local old = this
+        this = b
+        b.func()
+        this = old
+        if b.keep then
+            if b.checked then NAMED[b:GetName() .. "Check"]:Hide(); b.checked = nil
+            else NAMED[b:GetName() .. "Check"]:Show(); b.checked = 1 end
+        end
+        -- one frame (`run` is a list of rows in this block)
+        for _, w in ipairs(ALLFRAMES) do
+            if w.scripts.OnUpdate and w:IsVisible() then fire(w, "OnUpdate", 0.02) end
+        end
+    end
+    local function tickShown(level, value)
+        return NAMED[buttonOf(level, value):GetName() .. "Check"]:IsShown()
+    end
+    click(f.lootBoss)
+    shownList(1)
+    check("All bosses ticked to start", tickShown(1, "*all"), true)
+    clickInList(1, heads[1])
+    check("a boss ticked keeps its tick", tickShown(1, heads[1]), true)
+    check("and All bosses loses its", tickShown(1, "*all"), false)
+    clickInList(1, "*shared")
+    check("a second keeps the first one's tick", tickShown(1, heads[1]), true)
+    check("and shows its own", tickShown(1, "*shared"), true)
+    clickInList(1, heads[1])
+    check("unticking one leaves the other", tickShown(1, "*shared"), true)
+    check("and takes its own", tickShown(1, heads[1]), false)
+    RB.ToggleLootBoss(RB.raid, "*all")
+    click(f.lootShow)
+    shownList(1)
+    clickInList(1, "plate")
+    check("Show: a kind keeps its tick", tickShown(1, "plate"), true)
+    check("and All items loses its", tickShown(1, "all"), false)
+    UIDROPDOWNMENU_MENU_LEVEL = 2
+    MENU = {}
+    RB.InitLootShowMenu()
+    UIDROPDOWNMENU_MENU_LEVEL = nil
+    shownList(2)
+    clickInList(2, "cls:PALADIN")
+    check("a class in the side list keeps its tick", tickShown(2, "cls:PALADIN"), true)
+    check("and Class beside it gets one", tickShown(1, "class"), true)
+    check("and plate keeps its", tickShown(1, "plate"), true)
+    NAMED["DropDownList1"]:Hide()
+    NAMED["DropDownList2"]:Hide()
+    UIDROPDOWNMENU_OPEN_MENU = nil
+    RB.ToggleLootShow("all")
 
     print("showing only some kinds of loot")
     local function kinds(k)
