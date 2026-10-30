@@ -386,6 +386,18 @@ local function decoded(status, body, what)
     return v
 end
 
+--[[ An event's SR+ settings as raidres has them now, for the Event settings
+     window to start from. done({srplus, inc, prev}) or done(nil, why). ]]
+function RB.HttpEventSettings(ref, done)
+    RB.Get("/api/events/" .. ref, function(status, body)
+        local e, why = decoded(status, body, "list " .. ref)
+        if not e then done(nil, why) return end
+        done({ srplus = e.allowSrPlus == true,
+               inc = tonumber(e.defaultSrPlusIncrease) or 0,
+               prev = type(e.previousRaidEventReference) == "string" and e.previousRaidEventReference or nil })
+    end, true)
+end
+
 --[[ Every raid raidres offers for this game, with its kind -- RAID40,
      RAID20, RAID10 or WORLDBOSS -- which is how its own "Create event" form
      groups them. A small public file, fetched quietly for the New event
@@ -688,6 +700,29 @@ function RB.SendCreateCommand(e)
     pcall(WriteCustomFile, LOCK_RESULT, "", "w")
     if not pcall(WriteCustomFile, LOCK_CMD, cmd, "w") then return false end
     RB.createPending = { event = e, sent = GetTime() }
+    lockTick:Show()
+    return true
+end
+
+--[[ An existing event's hard reserves and SR+:
+       settings REF [hr=ID,ID|hr=none|tpl=ID] srplus=0|1 [inc=N] [prev=REF|none]
+     -> ok saved. Hard reserves go only when they were changed, so ones made
+     on the site with class limits or notes aren't flattened by a save. ]]
+function RB.SendSettingsCommand(ref, e)
+    if not RB.LockControlReady() or RB.HelperBusy() then return false end
+    local cmd = "settings " .. ref
+    if e.tpl then
+        cmd = cmd .. " tpl=" .. e.tpl
+    elseif e.hrChanged then
+        cmd = cmd .. " hr=" .. ((table.getn(e.hr) > 0) and table.concat(e.hr, ",") or "none")
+    end
+    cmd = cmd .. " srplus=" .. (e.srplus and "1" or "0")
+    if e.srplus then
+        cmd = cmd .. " inc=" .. (e.inc or 0) .. " prev=" .. (e.prev or "none")
+    end
+    pcall(WriteCustomFile, LOCK_RESULT, "", "w")
+    if not pcall(WriteCustomFile, LOCK_CMD, cmd, "w") then return false end
+    RB.createPending = { settings = ref, event = e, sent = GetTime() }
     lockTick:Show()
     return true
 end

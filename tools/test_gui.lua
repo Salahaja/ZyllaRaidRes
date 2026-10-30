@@ -1423,7 +1423,8 @@ check("the Recent menu offers one, greyed without the helper",
 
 RaidResLockReady = function() return 1 end
 click(f.recent)
-local newEntry = MENU[table.getn(MENU)]
+local newEntry
+for _, info in ipairs(MENU) do if info.value == "new" then newEntry = info end end
 check("with it, the Recent menu ends with a new event", plain(newEntry.text), "New event...")
 check("ready to pick", newEntry.disabled, nil)
 pick(newEntry)
@@ -1586,6 +1587,61 @@ check("the group names can't be picked", openMenu(ev.raid)[1].isTitle, 1)
 SlashCmdList.RAIDRESBRIDGE("new")
 run(1)
 check("and asked for once a session", table.getn(ASKED), 1)
+
+-- ================================================================== an event's settings
+print("an existing event's settings")
+RB = world()
+RaidResLockReady = function() return 1 end
+fakeDll()
+PAGES["/api/events/DEMO42"] = { body = '{"raidId":100,"allowSrPlus":true,"defaultSrPlusIncrease":15,' ..
+    '"previousRaidEventReference":"OLD111","reservations":[]}' }
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+click(f.recent)
+local setEntry
+for _, info in ipairs(MENU) do if info.value == "settings" then setEntry = info end end
+check("the Recent menu offers the open list's settings", setEntry and plain(setEntry.text),
+    "Event settings for DEMO42...")
+pick(setEntry)
+local ev2 = RB.eventFrame
+local CMD2, RESULT2 = "RaidResBridge_lock_cmd.txt", "RaidResBridge_lock_result.txt"
+FILES[RESULT2] = "ok templates []"
+run(1)
+check("titled with the list", ev2.title:GetText(), "Event settings: DEMO42")
+check("only hard reserves and SR+", tostring(ev2.raid:IsShown()) .. tostring(ev2.desc:IsShown()) ..
+    tostring(ev2.hr:IsShown()) .. tostring(ev2.srplus:IsShown()), "falsefalsetruetrue")
+check("starting from the list's hard reserves", ev2.hr.ddText,
+    table.getn(Expected_Data.hardreserves) .. (table.getn(Expected_Data.hardreserves) == 1 and " item" or " items"))
+check("and raidres's SR+ settings", tostring(ev2.srplus:GetChecked()) .. " " .. ev2.inc.ddText .. " " .. ev2.prev.ddText,
+    "1 +15 OLD111")
+check("saved, not created", ev2.create:GetText(), "Save")
+FILES[CMD2] = nil
+click(ev2.create)
+check("an untouched save leaves the hard reserves alone", FILES[CMD2], "settings DEMO42 srplus=1 inc=15 prev=OLD111")
+FILES[RESULT2] = "ok saved"
+local askedBefore = table.getn(ASKED)
+run(1)
+check("saved: the dialog closes", ev2:IsVisible(), false)
+local refetched = false
+for i = askedBefore + 1, table.getn(ASKED) do
+    if ASKED[i] == "/api/events/DEMO42" then refetched = true end
+end
+check("and the list is fetched again", refetched, true)
+pick(setEntry)
+pick(entry(openMenu(ev2.hr), "none"))
+ev2.srplus:SetChecked(nil)
+fire(ev2.srplus, "OnClick")
+FILES[CMD2] = nil
+click(ev2.create)
+check("cleared hard reserves and SR+ off go as such", FILES[CMD2], "settings DEMO42 hr=none srplus=0")
+FILES[RESULT2] = "error: The previous event does not have SR+ enabled."
+run(1)
+check("raidres's refusal stays in the dialog", plain(ev2.status:GetText()),
+    "raidres: The previous event does not have SR+ enabled.")
+ev2:Hide()
+SlashCmdList.RAIDRESBRIDGE("new")
+check("New event afterwards has every row back", tostring(ev2.raid:IsShown()) .. ev2.create:GetText(),
+    "trueCreate event")
 
 -- ================================================================== SR+ in the window
 print("SR+ beside each reserve")

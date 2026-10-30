@@ -527,6 +527,14 @@ manage there, not a field here. A time already gone is refused
 before anything is sent. Anything raidres refuses comes back in its own words,
 and the dialog stays open to fix it.
 
+**Changing an event you made**: *Event settings for REF...* under the arrow
+(or `/rrb settings`, or the minimap menu) opens the same dialog for the open
+list, showing only its hard reserves and SR+. They start as raidres has them
+now. **Save** changes only those. The start time, admins and reserves stay as
+they are. Hard reserves are sent only if you changed them, so ones set on the
+site with class limits or notes aren't flattened. raidres refuses anything it
+won't take, such as carrying SR+ from a list without SR+, in its own words.
+
 From a terminal, `tools/raidres_lock.py create` does the same, and `--dry-run`
 shows what it would send:
 
@@ -544,6 +552,7 @@ python tools/raidres_lock.py create 95 2026-11-01 20:00 1 1 1 0 0 MC Sunday --dr
 | `/rrb lockcontrol` | toggle in-game lock/unlock (manual mode, without RaidResLock.dll) |
 | `/rrb restart` | restart the helper script's Chrome (if it gets stuck) |
 | `/rrb new` | make a new raidres event (needs RaidResLock.dll) |
+| `/rrb settings` | change the open list's hard reserves and SR+ |
 | `/rrb minimap` | show or hide the minimap button |
 | `/rrb skin auto`, `blizzard` or `pfui` | pick the look; `auto` is pfUI's when pfUI is loaded |
 | `/rrb help` | the commands, and how it's fetching |
@@ -559,8 +568,8 @@ failure.
 ```bash
 lua tools/test_bridge.lua   # lists, the merge, typed reserves, names   (139)
 lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (121)
-lua tools/test_gui.lua      # the window, minimap, RollFor box, events  (461)
-python tools/test_lock.py   # reserving and events, in a throwaway Chrome (71)
+lua tools/test_gui.lua      # the window, minimap, RollFor box, events  (473)
+python tools/test_lock.py   # reserving and events, in a throwaway Chrome (79)
 lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Event.lua Minimap.lua Chat.lua
 ```
 

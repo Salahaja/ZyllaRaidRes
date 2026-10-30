@@ -1986,6 +1986,10 @@ local function onPickRecent()
         RB.OpenNewEvent()
         return
     end
+    if this.value == "settings" then
+        RB.OpenEventSettings()
+        return
+    end
     f.link:SetText("https://raidres.top/res/" .. this.value)
     RB.FetchFromBox()
 end
@@ -2031,6 +2035,14 @@ function RB.InitRecentMenu()
             info.disabled = 1
         end
         UIDropDownMenu_AddButton(info)
+        -- the open list's hard reserves and SR+, when it's a raidres list
+        if s and s.ref and s.ref ~= "manual" and RB.LockControlReady and RB.LockControlReady() then
+            info = {}
+            info.text = hex(GREEN, "Event settings for " .. s.ref .. "...")
+            info.value = "settings"
+            info.func = onPickRecent
+            UIDropDownMenu_AddButton(info)
+        end
     end
 end
 

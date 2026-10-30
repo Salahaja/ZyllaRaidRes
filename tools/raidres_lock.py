@@ -806,6 +806,100 @@ def templates():
         return "ok templates " + json.dumps(answer.get("lists", []), ensure_ascii=False)
     return reserve_line(answer)
 
+# ---------------------------------------------------------------------------
+# An existing event's hard reserves and SR+
+#
+# PATCH /api/events/<ref> with only the fields being changed, the way lock
+# and unlock already send {reference, locked}: what is left out -- the
+# start, the admins, the banned -- stays as it is on raidres.
+# ---------------------------------------------------------------------------
+
+_SETTINGS_JS = r"""
+async (a) => {
+""" + _PAGE_HELPERS + r"""
+  if (await signedIn() == null) return answer({ result: 'signin' });
+  const ev = await get('/api/events/' + encodeURIComponent(a.ref));
+  if (!ev.ok || !ev.body) return answer({ result: 'error', message: 'raidres has no list ' + a.ref });
+  const e = ev.body;
+  if (e.isAuthor === false && !a.dry)
+    return answer({ result: 'error', message: "that list isn't yours to change" });
+  const body = { reference: e.reference };
+  if (a.tpl) {
+    const t = await get('/api/raid-event-templates');
+    const list = Array.isArray(t.body) ? t.body : ((t.body && t.body.data) || []);
+    const tpl = list.find(x => x && x.id === a.tpl);
+    if (!tpl) return answer({ result: 'error', message: "that saved HR list isn't on raidres any more" });
+    if (tpl.raidId !== e.raidId) return answer({ result: 'error', message: 'that saved HR list is for another raid' });
+    body.advancedHrItems = (tpl.raidEventTemplateItems || [])
+      .filter(i => i.isHardReserved || (i.note && i.note.length > 0))
+      .map(i => ({ raidItemId: i.raidItemId, isHardReserved: !!i.isHardReserved, note: i.note || null,
+                   characterClasses: i.characterClasses || [],
+                   characterSpecializations: i.characterSpecializations || [],
+                   characterNames: i.characterNames || [] }));
+  } else if (a.hr) {
+    const raid = await get('/raids/raid_' + e.raidId + '.json');
+    if (!raid.ok || !raid.body) return answer({ result: 'error', message: "couldn't load the raid's loot table" });
+    // notes on items that aren't hard reserves are kept as they are
+    const kept = (e.advancedHrItems || []).filter(i => !i.isHardReserved && i.note);
+    const items = [];
+    for (const g of a.hr) {
+      const it = (raid.body.raidItems || []).find(i => i.gameDbItemId === g);
+      if (!it) return answer({ result: 'error', message: 'item ' + g + " isn't in this raid's loot on raidres" });
+      items.push({ raidItemId: it.id, isHardReserved: true, note: null,
+                   characterClasses: [], characterSpecializations: [], characterNames: [] });
+    }
+    body.advancedHrItems = items.concat(kept.filter(k => !items.some(i => i.raidItemId === k.raidItemId)));
+  }
+  if (a.sr != null) {
+    body.allowSrPlus = a.sr;
+    if (a.sr) {
+      if (a.inc != null) body.defaultSrPlusIncrease = a.inc;
+      if (a.prev !== undefined) body.previousRaidEventReference = a.prev;
+    }
+  }
+  if (a.dry) return answer({ result: 'plan', method: 'PATCH', body });
+  const r = await send('/api/events/' + encodeURIComponent(e.reference), 'PATCH', body);
+  if (r.fail) return r.fail;
+  return answer({ result: 'ok', done: 'saved' });
+}
+"""
+
+def event_settings(words, dry=False):
+    """settings REF [hr=ID,ID|hr=none|tpl=ID] [srplus=0|1] [inc=N] [prev=REF|prev=none]"""
+    if not words:
+        return "error: bad command"
+    try:
+        ref = validate_ref(words[0])
+        opts = {}
+        for w in words[1:]:
+            m = re.match(r"^(hr|tpl|srplus|inc|prev)=(\S+)$", w)
+            if not m:
+                raise ValueError("bad setting: %r" % w)
+            opts[m.group(1)] = m.group(2)
+        args = {"ref": ref, "dry": bool(dry)}
+        if "tpl" in opts:
+            args["tpl"] = int(opts["tpl"])
+        elif "hr" in opts:
+            args["hr"] = [] if opts["hr"] == "none" else [int(x) for x in opts["hr"].split(",") if x]
+        if "srplus" in opts:
+            if opts["srplus"] not in ("0", "1"):
+                raise ValueError("srplus must be 0 or 1")
+            args["sr"] = opts["srplus"] == "1"
+        if "inc" in opts:
+            args["inc"] = int(opts["inc"])
+            if not 0 <= args["inc"] <= 1000:
+                raise ValueError("SR+ increase out of range")
+        if "prev" in opts:
+            args["prev"] = None if opts["prev"] == "none" else validate_ref(opts["prev"])
+    except ValueError as e:
+        return "error: %s" % e
+    answer, line = _page_eval(_SETTINGS_JS, args, "https://raidres.top/res/%s" % ref)
+    if line:
+        return line
+    if answer.get("result") == "ok":
+        return "ok saved"
+    return reserve_line(answer)
+
 def signin(ref):
     validate_ref(ref)
     login_url = "https://raidres.top/"
@@ -911,6 +1005,14 @@ def watch(parent=None):
                 os.remove(cmd_path)
 
                 words = line.split()
+                if words and words[0] == "settings":
+                    log("%s ..." % line)
+                    result = event_settings(words[1:])
+                    log("  -> %s" % result)
+                    with open(result_path, "w", encoding="utf-8") as f:
+                        f.write(result)
+                    continue
+
                 if words == ["templates"]:
                     result = templates()
                     log("templates -> %s" % result[:80])
@@ -1048,6 +1150,12 @@ def main():
             sys.exit(1)
         result = reserve(words[0], words[1], words[2], None if remove else words[3],
                          words[4] if len(words) == 5 else None, remove=remove, dry=dry)
+        print(result)
+        sys.exit(0 if result.startswith(("ok", "plan")) else 1)
+
+    elif cmd == "settings":
+        dry = "--dry-run" in args
+        result = event_settings([w for w in args[1:] if w != "--dry-run"], dry=dry)
         print(result)
         sys.exit(0 if result.startswith(("ok", "plan")) else 1)
 

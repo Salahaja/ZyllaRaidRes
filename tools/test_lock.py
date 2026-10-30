@@ -94,6 +94,9 @@ for label, call in [
         check(label + " is refused", "refused", "refused")
 check("a short command is refused before Chrome", w.create_event(["95", "2026-11-02"]),
       "error: bad command")
+check("a bad setting is refused before Chrome", w.event_settings(["DEMO42", "srplus=maybe"]),
+      "error: srplus must be 0 or 1")
+check("so is an unknown one", w.event_settings(["DEMO42", "admins=all"]), "error: bad setting: 'admins=all'")
 opts, desc = w.split_options(["hr=19137,17076", "inc=10", "prev=WW8CK7", "MC", "inc=5", "night"])
 check("options come before the description", (opts, desc),
       ({"hr": "19137,17076", "inc": "10", "prev": "WW8CK7"}, "MC inc=5 night"))
@@ -146,6 +149,10 @@ def run(args, me="1000", event=None, chars=None, reply=None, script=None, tpls=N
         opts = opts || {};
         let r;
         if (url === '/api/auth/me') r = site.me;
+        else if (url.startsWith('/api/events/') && opts.method === 'PATCH') {
+          window.__sent.push({ url, method: opts.method, body: JSON.parse(opts.body) });
+          r = site.reply;
+        }
         else if (url.startsWith('/api/events/')) r = site.event;
         else if (url.startsWith('/raids/raid_')) r = site.raid;
         else if (url === '/api/user-characters') r = site.chars;
@@ -311,6 +318,29 @@ try:
     check("a saved list for another raid is refused", answer.get("message"), "that saved HR list is for another raid")
     answer, sent = run({}, script=w._TEMPLATES_JS, tpls=saved)
     check("the saved lists, small", answer, {"result": "ok", "lists": [{"id": 7, "name": "ZG HRs", "raid": 100, "hr": 1}]})
+
+    print("an existing event's settings")
+    mine = copy.deepcopy(OPEN) | {"isAuthor": True, "advancedHrItems": [
+        {"raidItemId": two[1]["id"], "isHardReserved": False, "note": "MS > OS"}]}
+    answer, sent = run({"ref": "DEMO42", "hr": [two[0]["gameDbItemId"]], "sr": True, "inc": 15, "prev": "OLD111"},
+                       script=w._SETTINGS_JS, event=mine, reply={"status": 200, "body": {}})
+    check("saved", answer, {"result": "ok", "done": "saved"})
+    check("one PATCH of only what changes", (sent[0]["method"], sent[0]["url"], sorted(sent[0]["body"])),
+          ("PATCH", "/api/events/DEMO42", ["advancedHrItems", "allowSrPlus", "defaultSrPlusIncrease",
+                                           "previousRaidEventReference", "reference"]))
+    check("the picked HR, and the site's note kept",
+          [(h["raidItemId"], h["isHardReserved"], h["note"]) for h in sent[0]["body"]["advancedHrItems"]],
+          [(two[0]["id"], True, None), (two[1]["id"], False, "MS > OS")])
+    answer, sent = run({"ref": "DEMO42", "sr": False}, script=w._SETTINGS_JS, event=mine,
+                       reply={"status": 200, "body": {}})
+    check("SR+ off alone touches nothing else", sent[0]["body"], {"reference": "DEMO42", "allowSrPlus": False})
+    answer, sent = run({"ref": "DEMO42", "hr": [], "sr": False}, script=w._SETTINGS_JS, event=mine,
+                       reply={"status": 200, "body": {}})
+    check("clearing HRs keeps the notes", [h["note"] for h in sent[0]["body"]["advancedHrItems"]], ["MS > OS"])
+    answer, sent = run({"ref": "DEMO42", "sr": False}, script=w._SETTINGS_JS,
+                       event=copy.deepcopy(OPEN) | {"isAuthor": False})
+    check("someone else's list is refused before sending", (answer.get("message"), sent),
+          ("that list isn't yours to change", []))
 finally:
     ws.close()
     w.kill_chrome()

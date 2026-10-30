@@ -204,13 +204,13 @@ end
 
 local function onPickHrNone()
     local e = form()
-    e.tpl, e.tplName, e.hr = nil, nil, {}
+    e.tpl, e.tplName, e.hr, e.hrChanged = nil, nil, {}, true
     picked()
 end
 
 local function onPickHrList()
     local e = form()
-    e.tpl, e.hr = this.value, {}
+    e.tpl, e.hr, e.hrChanged = this.value, {}, true
     for _, l in ipairs(RB.savedLists or {}) do
         if l.id == this.value then e.tplName = l.name end
     end
@@ -220,7 +220,7 @@ end
 -- An item ticked or unticked; the menu stays open for the next one.
 local function onToggleHrItem()
     local e = form()
-    e.tpl, e.tplName = nil, nil
+    e.tpl, e.tplName, e.hrChanged = nil, nil, true
     local id = this.value
     if hrHas(e, id) then
         for i = table.getn(e.hr), 1, -1 do
@@ -394,19 +394,19 @@ local function build()
     f.close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -5, -5)
     f.close:SetScript("OnClick", function() this:GetParent():Hide() end)
 
-    label(f, "Raid", -42)
+    f.raidLabel = label(f, "Raid", -42)
     f.raid = dropdown(f, "ZyllaRaidResEventRaid", 200, RB.InitEventRaidMenu, COL, -42)
-    label(f, "Starts", -74)
+    f.startsLabel = label(f, "Starts", -74)
     f.day = dropdown(f, "ZyllaRaidResEventDay", 130, RB.InitEventDayMenu, COL, -74)
     f.hour = dropdown(f, "ZyllaRaidResEventHour", 36, RB.InitEventHourMenu, COL + 150, -74)
     f.minute = dropdown(f, "ZyllaRaidResEventMinute", 36, RB.InitEventMinuteMenu, COL + 206, -74)
     f.clock = UI.text(f, "GameFontDisableSmall")
     f.clock:SetPoint("TOPLEFT", f, "TOPLEFT", COL, -98)
     f.clock:SetText("Your own clock, as raidres's site takes it.")
-    label(f, "Reserves each", -120)
+    f.limitLabel = label(f, "Reserves each", -120)
     f.limit = dropdown(f, "ZyllaRaidResEventLimit", 36, RB.InitEventLimitMenu, COL, -120)
 
-    label(f, "Hard reserves", -152)
+    f.hrLabel = label(f, "Hard reserves", -152)
     f.hr = dropdown(f, "ZyllaRaidResEventHR", 200, RB.InitEventHrMenu, COL, -152)
 
     f.lock = toggle(f, "ZyllaRaidResEventLock", "Lock at the start time", "lock",
@@ -426,7 +426,7 @@ local function build()
     f.fromLabel:SetText("from")
     f.prev = dropdown(f, "ZyllaRaidResEventPrev", 100, RB.InitEventPrevMenu, COL + 104, -288)
 
-    label(f, "Description", -322)
+    f.descLabel = label(f, "Description", -322)
     f.desc = UI.editBox(f, "ZyllaRaidResEventDesc", W - COL - EDGE - 4, "Optional")
     f.desc:SetPoint("TOPLEFT", f, "TOPLEFT", COL + 4, -318)
     f.desc:SetMaxLetters(200)
@@ -489,6 +489,37 @@ function RB.DrawNewEvent()
     if RB.createPending or not e.raid then f.create:Disable() else f.create:Enable() end
 end
 
+--[[ One dialog, two uses. A new event shows every row; an existing one's
+     settings show only its hard reserves and SR+, moved up to the top, and
+     save instead of create. Rows are moved while the dialog stands still. ]]
+local function layout(f, settings)
+    local newOnly = { f.raidLabel, f.raid, f.startsLabel, f.day, f.hour, f.minute, f.clock,
+                      f.limitLabel, f.limit, f.lock, f.comments, f.dupes, f.descLabel, f.desc }
+    for i = 1, table.getn(newOnly) do
+        if settings then newOnly[i]:Hide() else newOnly[i]:Show() end
+    end
+    local hrY, srY, rowY, statusY = -152, -232, -288, -350
+    if settings then hrY, srY, rowY, statusY = -46, -82, -112, -146 end
+    f.hrLabel:ClearAllPoints()
+    f.hrLabel:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, hrY)
+    f.hr:ClearAllPoints()
+    f.hr:SetPoint("TOPLEFT", f, "TOPLEFT", COL - 16, hrY + 8)
+    f.srplus:ClearAllPoints()
+    f.srplus:SetPoint("TOPLEFT", f, "TOPLEFT", COL - 4, srY + 4)
+    f.srLabel:ClearAllPoints()
+    f.srLabel:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, rowY)
+    f.inc:ClearAllPoints()
+    f.inc:SetPoint("TOPLEFT", f, "TOPLEFT", COL - 16, rowY + 8)
+    f.fromLabel:ClearAllPoints()
+    f.fromLabel:SetPoint("TOPLEFT", f, "TOPLEFT", COL + 76, rowY)
+    f.prev:ClearAllPoints()
+    f.prev:SetPoint("TOPLEFT", f, "TOPLEFT", COL + 88, rowY + 8)
+    f.status:ClearAllPoints()
+    f.status:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, statusY)
+    f:SetHeight(settings and 236 or H)
+    f.create:SetText(settings and "Save" or "Create event")
+end
+
 --[[ Open it, with last time's choices, or raidres's own defaults the
      first time: comments on, everything else off, one reserve each. The
      raid starts as the window's: the one you're in, or the list's. ]]
@@ -520,6 +551,9 @@ function RB.OpenNewEvent()
         prev = nil,
     }
     f.desc:SetText(last.description or "")
+    f.mode = nil
+    f.title:SetText("New raidres event")
+    layout(f, false)
     note("")
     -- your saved HR lists, through the helper, once a session
     if not RB.savedLists and not RB.HelperBusy() then RB.SendTemplatesCommand() end
@@ -536,9 +570,66 @@ function RB.OpenNewEvent()
     f:Show()
 end
 
+--[[ The list in the window, if it's a raidres one: its hard reserves (as
+     the fetched list has them) and SR+ settings (asked of raidres, with the
+     DLL), changed and saved through the helper. Only its owner can save. ]]
+function RB.OpenEventSettings()
+    local g = RB.gui
+    local s = g and g.snap
+    if not (RB.LockControlReady and RB.LockControlReady()) then
+        say("changing an event from in game needs RaidResLock.dll (the lock helper) running.")
+        return
+    end
+    if not s or not s.ref or s.ref == "manual" or not s.instance then
+        say("fetch a raidres list first: its settings are what this changes.")
+        return
+    end
+    UI = RB.UI
+    local f = RB.eventFrame
+    if not f then
+        f = RB.BuildDialog(build)
+        RB.eventFrame = f
+    end
+    local hr = {}
+    for id in pairs(s.hard) do table.insert(hr, id) end
+    table.sort(hr)
+    RB.eventForm = { raid = s.instance, hr = hr, srplus = false, inc = 10, prev = nil,
+                     day = date("%Y-%m-%d"), hour = 20, minute = 0, limit = 1 }
+    f.mode = s.ref
+    f.title:SetText("Event settings: " .. s.ref)
+    layout(f, true)
+    note("")
+    if not RB.savedLists and not RB.HelperBusy() then RB.SendTemplatesCommand() end
+    if RB.Http and RB.Http() then
+        RB.HttpEventSettings(s.ref, function(now)
+            local e = RB.eventForm
+            if not now or not e or f.mode ~= s.ref then return end
+            e.srplus, e.prev = now.srplus, now.prev
+            if now.inc > 0 then e.inc = now.inc end
+            RB.DrawNewEvent()
+        end)
+    end
+    RB.DrawNewEvent()
+    f:Show()
+end
+
 function RB.CreateEvent()
     local f, e = RB.eventFrame, RB.eventForm
     if not f or not e then return end
+    if f.mode then
+        if RB.sessionExpired then
+            note("Your raidres session expired: click Sign in in the main window first.", UI.RED)
+            return
+        end
+        if not RB.SendSettingsCommand(f.mode, e) then
+            note(RB.HelperBusy() and "The lock helper is busy; try again in a moment."
+                or "Can't reach the lock script. Is Nampower loaded?", UI.RED)
+            return
+        end
+        note("Saving it on raidres...", UI.GOLD)
+        RB.DrawNewEvent()
+        return
+    end
     if not e.raid then
         note("Pick a raid first.", UI.RED)
         return
@@ -607,6 +698,12 @@ end
 
 function RB.OnCreateResult(pending, text)
     local f = RB.eventFrame
+    if pending.settings and text == "ok saved" then
+        if f then f:Hide() end
+        RB.Notice("saved on raidres. Fetching the list again...")
+        RB.Request(pending.settings)
+        return
+    end
     local _, _, ref = string.find(text, "^ok created (%w+)$")
     if ref then
         if f then f:Hide() end
