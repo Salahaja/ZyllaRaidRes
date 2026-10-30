@@ -211,19 +211,29 @@ function RB.LoadRaids()
     return RaidResBridge_Raids ~= nil
 end
 
---[[ The last few lists fetched, newest first, for the window's Recent menu:
-     each its reference, its raid's name and when. A list fetched again
-     moves back to the top rather than appearing twice. ]]
-RB.RECENT = 5
+--[[ The lists fetched lately, newest first, for the window's Recent menu:
+     each its reference, its raid's name and when. The last few of each raid
+     -- the last three MCs, the last three ZGs -- for the raids run lately. A
+     list fetched again moves back to the top rather than appearing twice. ]]
+RB.RECENT = 3           -- lists kept per raid
+RB.RECENT_RAIDS = 6     -- raids kept: the menu has room for about that many
 function RB.RememberList(ref, data)
     if not ref or ref == "" then return end
     local meta = data and data.metadata or {}
     local raid = RaidResBridge_Raids and meta.instance and RaidResBridge_Raids[meta.instance]
     local place = (raid and raid.name) or (meta.instances and meta.instances[1]) or nil
     local list = { { ref = ref, place = place, at = time and time() or nil } }
+    local perRaid, raids = { [place or "?"] = 1 }, 1
     for _, r in ipairs(RaidResBridge_Recent or {}) do
-        if string.lower(r.ref or "") ~= string.lower(ref) and table.getn(list) < RB.RECENT then
-            table.insert(list, r)
+        local p = r.place or "?"
+        if string.lower(r.ref or "") ~= string.lower(ref) then
+            if not perRaid[p] and raids < RB.RECENT_RAIDS then
+                perRaid[p], raids = 0, raids + 1
+            end
+            if perRaid[p] and perRaid[p] < RB.RECENT then
+                perRaid[p] = perRaid[p] + 1
+                table.insert(list, r)
+            end
         end
     end
     RaidResBridge_Recent = list

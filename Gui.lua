@@ -2106,7 +2106,8 @@ function RB.BuildGui()
     f.recent:SetScript("OnClick", function()
         ToggleDropDownMenu(1, nil, RB.gui.recentMenu, "ZyllaRaidResLink", 0, 0)
     end)
-    tip(f.recent, "Recent lists", "The last " .. RB.RECENT .. " lists fetched. Pick one to fetch it again.")
+    tip(f.recent, "Recent lists", "The last " .. RB.RECENT ..
+        " lists of each raid you've fetched, by raid. Pick one to fetch it again.")
     f.recentMenu = CreateFrame("Frame", "ZyllaRaidResRecentMenu", f, "UIDropDownMenuTemplate")
     UIDropDownMenu_Initialize(f.recentMenu, RB.InitRecentMenu, "MENU")
 
@@ -2491,16 +2492,32 @@ function RB.InitRecentMenu()
         info.disabled = 1
         UIDropDownMenu_AddButton(info)
     end
+    -- each raid under its own name, the one run most lately first
     local now = time and time()
+    local places, seen = {}, {}
     for i = 1, table.getn(recent) do
-        local r = recent[i]
+        local p = recent[i].place or "?"
+        if not seen[p] then
+            seen[p] = true
+            table.insert(places, p)
+        end
+    end
+    for _, p in ipairs(places) do
         info = {}
-        info.text = r.ref .. "  " .. hex(GREY, (r.place or "?") ..
-            ((now and r.at) and (", " .. ago(now - r.at)) or ""))
-        info.value = r.ref
-        info.func = onPickRecent
-        info.checked = (current == string.lower(r.ref)) and 1 or nil
+        info.text = p
+        info.isTitle = 1
         UIDropDownMenu_AddButton(info)
+        for i = 1, table.getn(recent) do
+            local r = recent[i]
+            if (r.place or "?") == p then
+                info = {}
+                info.text = r.ref .. ((now and r.at) and ("  " .. hex(GREY, ago(now - r.at))) or "")
+                info.value = r.ref
+                info.func = onPickRecent
+                info.checked = (current == string.lower(r.ref)) and 1 or nil
+                UIDropDownMenu_AddButton(info)
+            end
+        end
     end
     if RB.OpenNewEvent then
         info = {}

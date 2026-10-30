@@ -266,8 +266,9 @@ way to swap it.
 
 1. **Paste the link** at the top and press Fetch or Enter. The box keeps the
    last list's link, so fetching again to refresh it is one click. The
-   **arrow** beside it lists the last five lists fetched, each with its raid
-   and when, and picking one fetches it again. Beside Fetch is the list's
+   **arrow** beside it lists the last three lists of each raid you've fetched
+   (the last three MCs, ZGs, Onyxias...), grouped under the raid's name with
+   when, and picking one fetches it again. Beside Fetch is the list's
    code, with its raid's name underneath.
    The button at the right shows whether raidres has the list **locked**
    (green) or **unlocked** (gold), or *Lock ?* when it isn't known. With
@@ -599,7 +600,7 @@ failure.
 ```bash
 lua tools/test_bridge.lua   # lists, the merge, typed reserves, names   (139)
 lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (134)
-lua tools/test_gui.lua      # the window, minimap, RollFor box, events  (550)
+lua tools/test_gui.lua      # the window, minimap, RollFor box, events  (552)
 python tools/test_lock.py   # reserving and events, in a throwaway Chrome (96)
 lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Event.lua Minimap.lua Chat.lua
 ```

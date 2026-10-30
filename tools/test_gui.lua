@@ -1424,26 +1424,43 @@ click(f.recent)
 check("the arrow opens the recent lists", f.recentMenu.ddOpen, true)
 check("none yet, and it says so", MENU[2] and MENU[2].disabled, 1)
 local zg = f.snap.instance
-for i = 1, 6 do RB.RememberList("LIST" .. i, { metadata = { instances = { "Molten Core" } } }) end
+local function mc(ref) RB.RememberList(ref, { metadata = { instances = { "Molten Core" } } }) end
+local function ony(ref) RB.RememberList(ref, { metadata = { instances = { "Onyxia's Lair" } } }) end
+for i = 1, 5 do mc("MC" .. i) end
+ony("ONY1")
 RB.RememberList("DEMO42", { metadata = { instance = zg, instances = { "raidres's name" } } })
-RB.RememberList("list3", { metadata = { instances = { "Molten Core" } } })
+mc("mc4")
 local function recentRefs()
     local out = {}
     for _, r in ipairs(RaidResBridge_Recent) do table.insert(out, r.ref) end
     return table.concat(out, ",")
 end
-check("five at most, newest first, a repeat moved up", recentRefs(), "list3,DEMO42,LIST6,LIST5,LIST4")
+check("the last three of each raid, newest first, a repeat moved up",
+    recentRefs(), "mc4,DEMO42,ONY1,MC5,MC3")
 check("the raid named as the loot tables name it", RaidResBridge_Recent[2].place, "Zul'Gurub")
 RB.RememberList("DEMO42", { metadata = { instance = zg } })
-check("fetched again, it moves to the top, once", recentRefs(), "DEMO42,list3,LIST6,LIST5,LIST4")
+check("fetched again, it moves to the top, once", recentRefs(), "DEMO42,mc4,ONY1,MC5,MC3")
+for i = 1, 6 do RB.RememberList("R" .. i, { metadata = { instances = { "Raid " .. i } } }) end
+local places = {}
+for _, r in ipairs(RaidResBridge_Recent) do places[r.place] = true end
+check("six raids at most: the one run longest ago goes", places["Molten Core"] == nil and places["Raid 6"], true)
+RaidResBridge_Recent = nil
+mc("MC1"); mc("MC2")
+RB.RememberList("DEMO42", { metadata = { instance = zg } })
 click(f.recent)
-check("each with its raid and when", plain(MENU[2].text), "DEMO42  Zul'Gurub, just now")
-check("the one loaded now is checked", MENU[2].checked, 1)
-check("and only that one", MENU[3].checked, nil)
+local shown = {}
+for _, info in ipairs(MENU) do
+    if info.value ~= "new" and info.value ~= "settings" then table.insert(shown, plain(info.text)) end
+end
+check("the menu groups them under each raid, the latest raid first", table.concat(shown, " | "),
+    "Recent lists | Zul'Gurub | DEMO42  just now | Molten Core | MC2  just now | MC1  just now")
+check("the raid names can't be picked", MENU[2].isTitle, 1)
+check("the one loaded now is checked", MENU[3].checked, 1)
+check("and only that one", MENU[5].checked, nil)
 FILES["RaidResBridge_request.txt"] = nil
-pick(MENU[3])
-check("picking one puts its link in the box", f.link:GetText(), "https://raidres.top/res/list3")
-check("and fetches it", FILES["RaidResBridge_request.txt"], "list3")
+pick(MENU[5])
+check("picking one puts its link in the box", f.link:GetText(), "https://raidres.top/res/MC2")
+check("and fetches it", FILES["RaidResBridge_request.txt"], "MC2")
 -- the watcher answers: that list is remembered too
 FILES["RaidResBridge_data.lua"] = string.gsub(slurp(DIR .. "RaidResBridge_data.lua"), "DEMO42", "NEW777")
 RB.Request("NEW777")
