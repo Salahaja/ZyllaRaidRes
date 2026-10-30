@@ -323,9 +323,12 @@ boss by boss in kill order, A to Z within each boss. Loot that more than one
 boss drops comes last, under *Shared*. Items are coloured by quality, with
 icons once the game has seen an item, and who holds each item is shown beside
 it.
-- **Sort** (above the loot, on the right): *By boss*, *A to Z* or *Z to A*.
-  The last two give one list with no boss headings.
-- **Show** (beside Sort): only some kinds of loot, using the same filters as
+- **Bosses** (above the loot, on the right): *All bosses*, or one of the raid's
+  own bosses in kill order, then its trash and *Shared*, as its loot table has
+  them, so that boss's loot alone shows, A to Z. The pick is kept for each raid.
+  A search still looks through every boss, and the button says *All: searching*
+  while it does.
+- **Show** (beside Bosses): only some kinds of loot, using the same filters as
   raidres's item picker: *Cloth*, *Leather*, *Mail*, *Plate*,
   *Weapon/Shield*, *Neck*, *Cape*, *Ring*, *Trinket*, *Profession*,
   *Class* and *Hard reserved*. Tick several to see any of them; the menu stays

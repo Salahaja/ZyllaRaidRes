@@ -646,7 +646,7 @@ print("sorting the loot, as raidres does")
 do
     -- Every row, not just the 17 on screen: what drawLoot asked for.
     local function allRows()
-        return RB.ItemRows(RB.raid, { sort = RB.LootSort(), show = RB.LootShow(), hard = f.snap.hard })
+        return RB.ItemRows(RB.raid, { boss = RB.LootBoss(RB.raid), show = RB.LootShow(), hard = f.snap.hard })
     end
     local function itemsOf(rows)
         local out = {}
@@ -669,7 +669,7 @@ do
         if it.o == 999 then shared = shared + 1 else places[it.b] = it.o end
     end
 
-    check("by boss is the default", f.lootSort:GetText(), "By boss")
+    check("every boss is the default", f.lootSort:GetText(), "All bosses")
     local rows = allRows()
     local heads, lastPlace, inOrder, sortedWithin = {}, -1, true, true
     local run = {}
@@ -699,22 +699,78 @@ do
     check("all of it", underShared, shared)
     check("the window draws the same rows", visible(f.lRows)[1].data.header, heads[1])
 
+    print("one boss's loot")
     click(f.lootSort)
-    check("Sort opens its menu", f.lootSortMenu.ddOpen, true)
-    check("with by boss ticked", menuValue("boss").checked, 1)
-    pick(menuValue("az"))
+    check("the boss button opens its menu", f.lootSortMenu.ddOpen, true)
+    check("with every boss ticked", menuValue("*all").checked, 1)
+    local listed = {}
+    for _, info in ipairs(MENU) do
+        if info.func and info.value ~= "*all" then table.insert(listed, plain(info.text)) end
+    end
+    check("then the raid's own bosses, in the list's order, Shared last",
+        table.concat(listed, "|"), table.concat(heads, "|"))
+    check("no A to Z any more", menuValue("az"), nil)
+    local first = heads[1]
+    pick(menuValue(first))
     rows = allRows()
-    check("A to Z is one list, no headings", table.getn(itemsOf(rows)), table.getn(rows))
-    check("A to Z", ordered(itemsOf(rows)), true)
-    check("and every item is there", table.getn(rows), table.getn(raid.items))
-    check("the button says so", f.lootSort:GetText(), "A to Z")
-    check("and it's kept", RaidResBridge_Options.lootSort, "az")
+    local fromFirst = 0
+    for _, it in ipairs(raid.items) do if it.b == first and it.o ~= 999 then fromFirst = fromFirst + 1 end end
+    check("one boss: only its loot", table.getn(itemsOf(rows)), fromFirst)
+    check("with no heading", table.getn(rows), fromFirst)
+    check("A to Z within it", ordered(itemsOf(rows)), true)
+    check("the button names it", plain(f.lootSort:GetText()), RB.LootBossLabel(first))
+    check("kept for this raid", RaidResBridge_Options.lootBoss[RB.raid], first)
     click(f.lootSort)
-    pick(menuValue("za"))
-    check("Z to A", ordered(itemsOf(allRows()), true), true)
-    click(f.lootSort)
-    pick(menuValue("boss"))
-    check("and back to by boss", allRows()[1].header ~= nil, true)
+    check("and ticked in the menu", menuValue(first).checked, 1)
+    pick(menuValue("*shared"))
+    check("Shared: what more than one boss drops", table.getn(itemsOf(allRows())), shared)
+    check("named so", plain(f.lootSort:GetText()), "Shared")
+    check("a long name fits the button", RB.LootBossLabel("Basalthar & Smoldaris"), "Basalthar & Smold...")
+    check("a short one is left alone", RB.LootBossLabel("Sulfuron Harbinger"), "Sulfuron Harbinger")
+
+    -- a search looks through every boss, and the button says so
+    f.search:SetText(string.lower(string.sub(raid.items[1].n, 1, 5)))
+    fire(f.search, "OnTextChanged")
+    local foundAll = RB.ItemRows(RB.raid, { boss = RB.LootBoss(RB.raid), search = RB.search })
+    local anyHeader = false
+    for _, r in ipairs(foundAll) do if r.header then anyHeader = true end end
+    check("a search looks past the pick, boss by boss", anyHeader, true)
+    check("and the button says it", plain(f.lootSort:GetText()), "All: searching")
+    f.search:SetText("")
+    fire(f.search, "OnTextChanged")
+    check("cleared, the pick is back", plain(f.lootSort:GetText()), "Shared")
+
+    -- Show on top of the pick: a boss with nothing left says so
+    local plateless
+    for _, g in ipairs(RB.LootGroups(RB.raid)) do
+        local any = false
+        for _, it in ipairs(raid.items) do
+            local k = (it.o == 999 and "*shared") or it.b or ""
+            if k == g.key and string.find(" " .. (it.t or "") .. " ", " plate ", 1, true) then any = true end
+        end
+        if not any then plateless = plateless or g end
+    end
+    if plateless then
+        RB.SetLootBoss(RB.raid, plateless.key)
+        RB.ToggleLootShow("plate")
+        check("a boss with nothing left after Show says so",
+            string.find(f.lEmpty:GetText() or "", "No loot from " .. plateless.name .. " matches Show: Plate", 1, true) ~= nil,
+            true)
+        RB.ToggleLootShow("all")
+    else
+        check("a boss without plate to test with", plateless ~= nil, true)
+    end
+
+    -- another raid has its own pick, and a boss it hasn't is every boss
+    check("another raid starts on every boss", RB.LootBoss(-1), nil)
+    RaidResBridge_Options.lootBoss[RB.raid] = "Nobody Here"
+    check("a pick the loot table no longer has is every boss", RB.LootBoss(RB.raid), nil)
+    RaidResBridge_Options.lootSort = "za"
+    RaidResBridge_Options.lootBoss = nil
+    RB.Refresh()
+    check("the old Z to A sort falls back to every boss", f.lootSort:GetText(), "All bosses")
+    check("and is forgotten", RaidResBridge_Options.lootSort, nil)
+    check("boss by boss again", allRows()[1].header ~= nil, true)
 
     print("showing only some kinds of loot")
     local function kinds(k)
@@ -776,7 +832,7 @@ do
     pick(menuValue("update"))
     check("and the menu offers the update", FILES["RaidResBridge_request.txt"], "RAIDS")
     raid.items = saved
-    RaidResBridge_Options.lootSort = nil
+    RaidResBridge_Options.lootBoss = nil
     RB.Refresh()
 end
 
