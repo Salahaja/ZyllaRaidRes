@@ -2226,7 +2226,8 @@ RB = world()
 RaidResLockReady = function() return 1 end
 fakeDll()
 PAGES["/api/events/DEMO42"] = { body = '{"raidId":100,"allowSrPlus":true,"defaultSrPlusIncrease":15,' ..
-    '"previousRaidEventReference":"OLD111","reservations":[]}' }
+    '"previousRaidEventReference":"OLD111","reservationLimit":2,"allowDuplicateReservation":false,' ..
+    '"reservations":[]}' }
 SlashCmdList.RAIDRESBRIDGE("")
 f = RB.gui
 click(f.recent)
@@ -2257,6 +2258,22 @@ check("its own previous one ticked", entry(openMenu(ev2.prev), "OLD111").checked
 FILES[CMD2] = nil
 click(ev2.create)
 check("an untouched save leaves the hard reserves alone", FILES[CMD2], "settings DEMO42 srplus=1 inc=15 prev=OLD111")
+check("and reserves each and the same item twice, read but not changed", string.find(FILES[CMD2], "limit=", 1, true), nil)
+check("reserves each shows as raidres has it", ev2.limit.ddText, "2")
+check("on a row of its own, with the same item twice beside it",
+    tostring(ev2.limit:IsShown()) .. tostring(ev2.dupes:IsShown()) .. tostring(ev2.lock:IsShown()), "truetruefalse")
+FILES[RESULT2] = "ok saved"
+run(1)
+pick(setEntry)
+FILES[RESULT2] = "ok templates []"
+run(1)
+pick(entry(openMenu(ev2.limit), 3))
+ev2.dupes:SetChecked(1)
+fire(ev2.dupes, "OnClick")
+FILES[CMD2] = nil
+click(ev2.create)
+check("changed, they go as raidres names them", FILES[CMD2],
+    "settings DEMO42 limit=3 dupes=1 srplus=1 inc=15 prev=OLD111")
 FILES[RESULT2] = "ok saved"
 local askedBefore = table.getn(ASKED)
 run(1)
@@ -2295,8 +2312,9 @@ run(1)
 local realGet = RB.Get
 RB.Get = function() end             -- raidres hasn't answered yet
 pick(setEntry)
-check("while raidres is read, the dialog says so", plain(ev2.status:GetText()), "Reading SR+ from raidres...")
+check("while raidres is read, the dialog says so", plain(ev2.status:GetText()), "Reading the settings from raidres...")
 check("and SR+ shows as not known", ev2.inc.ddText .. " " .. ev2.prev.ddText, "+? ?")
+check("and so does reserves each", ev2.limit.ddText, "?")
 FILES[CMD2] = nil
 click(ev2.create)
 check("Save before it answers leaves SR+ alone", FILES[CMD2], "settings DEMO42")
@@ -2316,7 +2334,7 @@ local realHttp = RB.Http
 RB.Http = function() return false end
 pick(setEntry)
 check("without the DLL, the dialog says SR+ is left as it is",
-    string.find(plain(ev2.status:GetText()), "leaves SR+ as it is there unless you change it", 1, true) ~= nil, true)
+    string.find(plain(ev2.status:GetText()), "and SR+ as they are there unless you change them", 1, true) ~= nil, true)
 FILES[CMD2] = nil
 click(ev2.create)
 check("and Save leaves it so", FILES[CMD2], "settings DEMO42")
@@ -2628,6 +2646,29 @@ do
     check("while the list doesn't say, it's taken back as yours", RB.ClickRemovesTheirs(f.snap, "Brisa", id), false)
     RB.OthersFor("DEMO42").brisa = nil
     check("never offered for you", RB.CanRemoveTheirs(f.snap, "Tester"), false)
+    -- one more for someone who signed up themselves, beside theirs, in the
+    -- class and spec they're on the list as
+    RB.webWho.demo42 = { brisa = { class = "Priest", spec = "PriestShadow" } }
+    local wasLimit = RaidResBridge_Limit
+    RaidResBridge_Limit = 9
+    RB.Refresh()
+    local spare
+    for _, r in ipairs(visible(f.lRows)) do
+        local g = r.data and r.data.item and r.data.item.g
+        if g and not (f.snap.web.brisa and f.snap.web.brisa[g]) and not f.snap.hard[g] then spare = g break end
+    end
+    check("their class comes from the list itself", RB.ClassOf("Brisa"), "PRIEST")
+    FILES[CMD4], POPUP = nil, nil
+    RB.ClickItem({ item = { g = spare } })
+    check("a new item for them asks where, as for anyone", POPUP and POPUP.which, "ZYLLARAIDRES_WHERE")
+    StaticPopupDialogs.ZYLLARAIDRES_WHERE.OnAccept()
+    check("on raidres: beside theirs, in their class and spec, unasked", FILES[CMD4],
+        "reserve-for DEMO42 " .. tostring(spare) .. " Brisa Priest PriestShadow")
+    FILES[RESULT4] = "ok reserved PriestShadow"
+    run(1)
+    RB.webWho.demo42 = nil
+    RB.OthersFor("DEMO42").brisa = nil
+    RaidResBridge_Limit = wasLimit
     RB.Refresh()
 end
 

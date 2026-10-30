@@ -563,10 +563,12 @@ and the dialog stays open to fix it.
 
 **Changing an event you made**: *Event settings for REF...* under the arrow
 (or `/rrb settings`, or the minimap menu) opens the same dialog for the open
-list, showing only its hard reserves and SR+. They start as raidres has them
-now. **Save** changes only those. The start time, admins and reserves stay as
-they are. Hard reserves are sent only if you changed them, so ones set on the
-site with class limits or notes aren't flattened. raidres refuses anything it
+list, showing its reserves each, whether one person may reserve the same item
+twice, its hard reserves and SR+. They start as raidres has them now. **Save**
+changes only those. The start time, admins and reserves stay as they are.
+Reserves each, the same item twice and hard reserves are sent only if you
+changed them, so hard reserves set on the site with class limits or notes
+aren't flattened. raidres refuses anything it
 won't take, such as carrying SR+ from a list without SR+, in its own words.
 
 **One player's SR+**: on a raidres list with SR+ on, right-click one of a
@@ -586,7 +588,9 @@ raidres as raidres's own "This reservation is for another player". It asks for
 their spec once, and the X takes their reserve back off. That option is only
 for the list's owner and its admins, and the reserve is filed under your
 raidres account, so they can't change it on the site; you and the list's admins
-can. Someone who signed up on raidres themselves is left to change their own.
+can. For someone who signed up on raidres themselves, it adds one beside
+theirs, as the site lets an admin do: in the class and spec they signed up
+with, counted with theirs against the list's reserves each.
 
 **Removing anyone's reserve**: as on the site, the list's owner and its admins
 can take back a reserve someone made themselves. Pick the player, then click

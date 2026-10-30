@@ -505,29 +505,31 @@ async (a) => {
   const mine = (e.reservations || []).filter(r => r.user && String(r.user.id) === String(who)
     && r.character && String(r.character.name).toLocaleLowerCase() === name);
   const held = mine.filter(r => r.raidItemId !== null);
+  // every reserve made as that character, whoever made it
+  const asThem = (e.reservations || []).filter(r => r.character
+    && String(r.character.name).toLocaleLowerCase() === name);
 
   // For another player: raidres's own "This reservation is for another
-  // player" (isTemporary), which only the list's owner and admins have.
-  // Theirs are filed under you, so "mine" above is right for them too.
+  // player" (isTemporary), which only the list's owner and admins have. It
+  // sits beside whatever that character holds already -- their own sign-up
+  // too, as the site lets an admin add a second item to it -- so the limit,
+  // a duplicate, their class and their spec go by all of it.
   if (a.forOther) {
     const admins = (e.extraAdministratorUserIds || []).map(String);
     if (e.isAuthor === false && !admins.includes(String(who)))
       return answer({ result: 'error', message: a.theirs
         ? "only the list's owner or its admins can remove someone's reserve"
         : "only the list's owner or its admins can reserve for others" });
-    const theirOwn = (e.reservations || []).some(r => r.character && r.user
-      && String(r.character.name).toLocaleLowerCase() === name && String(r.user.id) !== String(who));
-    if (theirOwn && !a.remove)
-      return answer({ result: 'error', message: a.name + ' signed up on raidres themselves; they change it there' });
   }
+  const theirs = a.forOther ? asThem : mine;
 
   if (a.remove) {
     // of two copies, the one with the least SR+ goes (the later one, if alike)
     const sp = r => (r.srPlus && Number(r.srPlus.value)) || 0;
     // theirs: any reserve made as that character, their own sign-up too,
-    // which the list's owner and its admins may remove, as on the site
-    const pool = a.theirs ? (e.reservations || []).filter(r => r.character
-      && String(r.character.name).toLocaleLowerCase() === name) : held;
+    // which the list's owner and its admins may remove, as on the site;
+    // unreserve-for only what you made for them
+    const pool = a.theirs ? asThem : held;
     const row = pool.filter(r => ids.includes(r.raidItemId))
       .reduce((low, r) => (low && sp(low) < sp(r)) ? low : r, null);
     if (!row) return answer({ result: 'error', message: a.name + " hasn't reserved that on raidres" });
@@ -536,18 +538,19 @@ async (a) => {
       || answer({ result: 'ok', done: 'removed' });
   }
 
-  if (!e.allowDuplicateReservation && held.some(r => ids.includes(r.raidItemId)))
+  const taken = theirs.filter(r => r.raidItemId !== null);
+  if (!e.allowDuplicateReservation && taken.some(r => ids.includes(r.raidItemId)))
     return answer({ result: 'error', message: a.name + ' already has that reserved' });
-  if (e.reservationLimit && held.length >= e.reservationLimit)
-    return answer({ result: 'error', message: a.name + ' already has ' + held.length + ' of '
+  if (e.reservationLimit && taken.length >= e.reservationLimit)
+    return answer({ result: 'error', message: a.name + ' already has ' + taken.length + ' of '
       + e.reservationLimit + ' reserved' });
-  const signedUp = mine.find(r => r.character.class);
+  const signedUp = theirs.find(r => r.character.class);
   if (signedUp && signedUp.character.class !== a.cls)
     return answer({ result: 'error', message: a.name + ' is signed up as ' + signedUp.character.class });
 
   // The spec: the one already signed up with, else the saved character's,
   // else the game's pick -- and with none of those, ask the game for one.
-  let spec = (mine.find(r => r.character.specialization) || { character: {} }).character.specialization;
+  let spec = (theirs.find(r => r.character.specialization) || { character: {} }).character.specialization;
   if (!spec && !a.forOther) {
     const chars = await get('/api/user-characters');
     const list = Array.isArray(chars.body) ? chars.body : ((chars.body && chars.body.data) || []);
@@ -559,7 +562,7 @@ async (a) => {
 
   const body = { reference: e.reference, characterName: signedUp ? signedUp.character.name : a.name,
     characterClass: a.cls, specialization: spec, isTemporary: !!a.forOther, raidItemIds: [ids[0]], comment: '' };
-  if (a.dry) return answer({ result: 'plan', method: 'POST', body, me: who, held: held.length,
+  if (a.dry) return answer({ result: 'plan', method: 'POST', body, me: who, held: taken.length,
     limit: e.reservationLimit });
   return (await send('/api/raid-event-reservations', 'POST', body)).fail
     || answer({ result: 'ok', done: 'reserved', spec });
@@ -939,6 +942,9 @@ async (a) => {
     const kept = before.filter(i => !i.isHardReserved && !items.some(x => x.raidItemId === i.raidItemId));
     body.advancedHrItems = items.concat(kept.map(entry));
   }
+  // reserves each, and the same item twice: only when the game sends them
+  if (a.limit != null) body.reservationLimit = a.limit;
+  if (a.dupes != null) body.allowDuplicateReservation = a.dupes;
   if (a.sr != null) {
     body.allowSrPlus = a.sr;
     if (a.sr) {
@@ -958,14 +964,14 @@ async (a) => {
 
 def event_settings(words, dry=False):
     """settings REF [hr=ID,ID|hr=none|tpl=ID] [srplus=0|1] [inc=N] [prev=REF|prev=none]
-                [skip=N] [input=0|1] [valid=0|1]"""
+                [skip=N] [input=0|1] [valid=0|1] [limit=N] [dupes=0|1]"""
     if not words:
         return "error: bad command"
     try:
         ref = validate_ref(words[0])
         opts = {}
         for w in words[1:]:
-            m = re.match(r"^(hr|tpl|srplus|inc|prev|skip|input|valid)=(\S+)$", w)
+            m = re.match(r"^(hr|tpl|srplus|inc|prev|skip|input|valid|limit|dupes)=(\S+)$", w)
             if not m:
                 raise ValueError("bad setting: %r" % w)
             opts[m.group(1)] = m.group(2)
@@ -988,11 +994,15 @@ def event_settings(words, dry=False):
             args["skip"] = int(opts["skip"])
             if not 0 <= args["skip"] <= 10:
                 raise ValueError("SR+ skip count out of range")
-        for k in ("input", "valid"):
+        for k in ("input", "valid", "dupes"):
             if k in opts:
                 if opts[k] not in ("0", "1"):
                     raise ValueError("%s must be 0 or 1" % k)
                 args[k] = opts[k] == "1"
+        if "limit" in opts:
+            args["limit"] = int(opts["limit"])
+            if not 1 <= args["limit"] <= 20:
+                raise ValueError("reserves each out of range")
     except ValueError as e:
         return "error: %s" % e
     answer, line = _page_eval(_SETTINGS_JS, args, "https://raidres.top/res/%s" % ref)

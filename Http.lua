@@ -225,23 +225,31 @@ end
      another player", isTemporary): taking one of theirs back is for the
      list's owner or admins, and asks first.
        RB.webOwn[lower(ref)][lower(name)][WoW item id] = true
+     And the class and spec each player is on the list as, so one more can
+     be reserved for them in it (RB.webWho, the same shape: {class, spec}).
      Not known for a list fetched without the DLL: no entry for its ref. ]]
-RB.webOwn = RB.webOwn or {}
+RB.webOwn, RB.webWho = RB.webOwn or {}, RB.webWho or {}
 function RB.NoteOwnRows(ref, event, raid)
     if not ref or type(event) ~= "table" then return end
     local byItem = {}
     for _, it in ipairs((raid and raid.raidItems) or {}) do byItem[it.id] = it.gameDbItemId end
-    local out = {}
+    local out, who = {}, {}
     for _, r in ipairs(event.reservations or {}) do
         local item = byItem[r.raidItemId]
         local c = r.character
-        if item and type(c) == "table" and type(c.name) == "string" and not c.isTemporary then
+        if type(c) == "table" and type(c.name) == "string" then
             local k = string.lower(string.gsub(c.name, "%s", ""))
-            out[k] = out[k] or {}
-            out[k][item] = true
+            if type(c.class) == "string" and not who[k] then
+                who[k] = { class = c.class, spec = type(c.specialization) == "string" and c.specialization or nil }
+            end
+            if item and not c.isTemporary then
+                out[k] = out[k] or {}
+                out[k][item] = true
+            end
         end
     end
     RB.webOwn[string.lower(ref)] = out
+    RB.webWho[string.lower(ref)] = who
 end
 
 --[[ Players' raidres accounts, so one can be made an admin of a list they
@@ -592,8 +600,9 @@ end
 
 --[[ An event's SR+ settings as raidres has them now: for the Event settings
      window to start from, and to check a code typed as the one SR+ carries
-     from. done({ref, raid, srplus, inc, skip, input, valid, prev}) or
-     done(nil, why). ]]
+     from, and its reserves each and the same item twice.
+     done({ref, raid, srplus, inc, skip, input, valid, prev, limit, dupes})
+     or done(nil, why). ]]
 function RB.HttpEventSettings(ref, done)
     RB.Get("/api/events/" .. ref, function(status, body)
         local e, why = decoded(status, body, "list " .. ref)
@@ -606,7 +615,10 @@ function RB.HttpEventSettings(ref, done)
                skip = tonumber(e.srPlusAllowEventSkipCount) or 0,
                input = e.allowSrPlusInput ~= false,
                valid = e.requireSrPlusValidation == true,
-               prev = type(e.previousRaidEventReference) == "string" and e.previousRaidEventReference or nil })
+               prev = type(e.previousRaidEventReference) == "string" and e.previousRaidEventReference or nil,
+               limit = tonumber(e.reservationLimit),
+               dupes = (type(e.allowDuplicateReservation) == "boolean") and e.allowDuplicateReservation
+                   or nil })
     end, true)
 end
 
@@ -980,13 +992,15 @@ function RB.SendCreateCommand(e)
     return true
 end
 
---[[ An existing event's hard reserves and SR+:
-       settings REF [hr=ID,ID|hr=none|tpl=ID] [srplus=0|1] [inc=N] [prev=REF|none]
+--[[ An existing event's hard reserves, reserves each, the same item twice
+     and SR+:
+       settings REF [hr=ID,ID|hr=none|tpl=ID] [limit=N] [dupes=0|1]
+                [srplus=0|1] [inc=N] [prev=REF|none]
      -> ok saved. Hard reserves go only when they were changed, so ones made
-     on the site with class limits or notes aren't flattened by a save. SR+
-     goes as raidres was read to have it (e.known) or as changed here
-     (e.set): a field neither read nor changed is left out, and the helper
-     leaves it alone. ]]
+     on the site with class limits or notes aren't flattened by a save, and
+     so do reserves each and the same item twice (e.set). SR+ goes as raidres
+     was read to have it (e.known) or as changed here: a field neither read
+     nor changed is left out, and the helper leaves it alone. ]]
 function RB.SendSettingsCommand(ref, e)
     if not RB.LockControlReady() or RB.HelperBusy() then return false end
     local cmd = "settings " .. ref
@@ -997,6 +1011,8 @@ function RB.SendSettingsCommand(ref, e)
     end
     local set = e.set or {}
     local function has(field) return e.known or set[field] end
+    if set.limit and tonumber(e.limit) then cmd = cmd .. " limit=" .. e.limit end
+    if set.dupes then cmd = cmd .. " dupes=" .. (e.dupes and "1" or "0") end
     if has("srplus") then
         cmd = cmd .. " srplus=" .. (e.srplus and "1" or "0")
         if e.srplus then

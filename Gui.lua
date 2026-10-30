@@ -894,13 +894,24 @@ function RB.ForOther(ref, name)
     return x and x.on and true or false
 end
 
---[[ A player's class token: whoever was added to this list, else the spec
-     kept for them last time -- raidres names a spec after its class,
-     "WarriorFury" -- else the raid's roster. ]]
+-- The class and spec `name` is on the list as on raidres (Http.lua's
+-- RB.webWho, from a list fetched with the DLL), or nil.
+local function onListAs(name, ref)
+    ref = ref or currentRef()
+    local list = ref and RB.webWho and RB.webWho[string.lower(ref)]
+    return list and list[key(name)]
+end
+
+--[[ A player's class token: whoever was added to this list, else the class
+     they're on it as on raidres, else the spec kept for them last time --
+     raidres names a spec after its class, "WarriorFury" -- else the raid's
+     roster. ]]
 function RB.ClassOf(name, ref)
     local k = key(name)
     local x = RB.OthersFor(ref or currentRef())[k]
     if x and x.class then return x.class end
+    local as = onListAs(name, ref)
+    if as and SPECS[string.upper(as.class)] then return string.upper(as.class) end
     local spec = RaidResBridge_Spec and RaidResBridge_Spec[k]
     if spec then
         for token, list in pairs(SPECS) do
@@ -952,7 +963,9 @@ function RB.ReserveForOther(id, remove, spec)
             RB.Notice("that item is hard-reserved, so nobody can soft-reserve it.")
             return
         end
-        spec = spec or (RaidResBridge_Spec and RaidResBridge_Spec[key(who)])
+        -- the spec they're on the list as goes first: raidres keeps one each
+        local as = onListAs(who, s.ref)
+        spec = spec or (as and as.spec) or (RaidResBridge_Spec and RaidResBridge_Spec[key(who)])
         if not spec then
             RB.askSpec = { item = id, name = who, other = true, class = token }
             ToggleDropDownMenu(1, nil, RB.gui.specMenu, "cursor")
@@ -1070,9 +1083,9 @@ function RB.ShouldAskWhere(s, name)
     local k = key(name)
     local x = RB.OthersFor(s.ref)[k]
     if x and (x.on or x.here) then return false end
-    -- already on raidres: signed up there, or reserved for by someone
-    if s.web[k] and next(s.web[k]) then return false end
-    -- raidres needs their class, from your group or a spec kept for them
+    -- raidres needs their class: from your group, the list itself (one who
+    -- signed up there can have one more reserved beside theirs), or a spec
+    -- kept for them
     return RB.ClassOf(name, s.ref) ~= nil
 end
 

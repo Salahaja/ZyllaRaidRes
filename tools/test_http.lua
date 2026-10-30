@@ -218,6 +218,8 @@ do
     check("one they made themselves is theirs", RB.webOwn.srplus.brisa[gameOf[6557]], true)
     check("one made for them isn't", RB.webOwn.srplus.madefor, nil)
     check("a list fetched another way says nothing", RB.webOwn.demo42, nil)
+    check("and the class and spec each is on the list as",
+        RB.webWho.srplus.brisa.class .. " " .. tostring(RB.webWho.srplus.brisa.spec), "Priest PriestShadow")
     local values = {}
     for _, p in ipairs(sr.softreserves) do
         for _, it in ipairs(p.items) do

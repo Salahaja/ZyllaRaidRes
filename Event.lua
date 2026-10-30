@@ -129,7 +129,13 @@ end
 local function onPickDay() form().day = this.value; picked() end
 local function onPickHour() form().hour = this.value; picked() end
 local function onPickMinute() form().minute = this.value; picked() end
-local function onPickLimit() form().limit = this.value; picked() end
+local function onPickLimit()
+    local e = form()
+    e.set = e.set or {}
+    e.set.limit = true          -- Event settings saves what was changed here
+    e.limit = this.value
+    picked()
+end
 
 local function add(text, value, func, checked)
     local info = {}
@@ -753,7 +759,10 @@ function RB.DrawNewEvent()
     UIDropDownMenu_SetText(dayName(e.day), f.day)
     UIDropDownMenu_SetText(two(e.hour), f.hour)
     UIDropDownMenu_SetText(two(e.minute), f.minute)
-    UIDropDownMenu_SetText(tostring(e.limit), f.limit)
+    -- an event's settings not read from raidres show as not known
+    local known = not f.mode or e.known
+    local set = e.set or {}
+    UIDropDownMenu_SetText((not f.mode or set.limit or e.limitRead) and tostring(e.limit) or "?", f.limit)
     f.lock:SetChecked(e.lock)
     f.comments:SetChecked(e.comments)
     f.srplus:SetChecked(e.srplus)
@@ -769,9 +778,6 @@ function RB.DrawNewEvent()
     local one = admins[1] and RB.Users().players[admins[1]]
     local n = table.getn(admins)
     UIDropDownMenu_SetText((n == 0 and "None") or (n == 1 and one and one.name) or (n .. " players"), f.admins)
-    -- an event's settings not read from raidres show as not known
-    local known = not f.mode or e.known
-    local set = e.set or {}
     UIDropDownMenu_SetText((known or set.inc) and ("+" .. e.inc) or "+?", f.inc)
     UIDropDownMenu_SetText((known or set.prev) and (e.prev or "Start fresh") or "?", f.prev)
     local sr = { f.srLabel, f.inc, f.fromLabel, f.prev }
@@ -782,17 +788,28 @@ function RB.DrawNewEvent()
 end
 
 --[[ One dialog, two uses. A new event shows every row; an existing one's
-     settings show only its hard reserves and SR+, moved up to the top, and
-     save instead of create. Rows are moved while the dialog stands still. ]]
+     settings show only its reserves each and the same item twice, its hard
+     reserves and SR+, moved up to the top, and save instead of create. Rows
+     are moved while the dialog stands still. ]]
 local function layout(f, settings)
     local newOnly = { f.raidLabel, f.raid, f.startsLabel, f.day, f.hour, f.minute, f.clock,
-                      f.limitLabel, f.limit, f.lock, f.comments, f.dupes, f.adminsLabel, f.admins,
-                      f.descLabel, f.desc }
+                      f.lock, f.comments, f.adminsLabel, f.admins, f.descLabel, f.desc }
     for i = 1, table.getn(newOnly) do
         if settings then newOnly[i]:Hide() else newOnly[i]:Show() end
     end
+    -- reserves each and the same item twice: their own row in settings
+    local limitY, dupesX, dupesY = -120, COL - 4, -256
     local hrY, srY, rowY, statusY = -152, -232, -288, -382
-    if settings then hrY, srY, rowY, statusY = -46, -82, -112, -146 end
+    if settings then
+        limitY, dupesX, dupesY = -46, COL + 72, -46
+        hrY, srY, rowY, statusY = -78, -114, -144, -178
+    end
+    f.limitLabel:ClearAllPoints()
+    f.limitLabel:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, limitY)
+    f.limit:ClearAllPoints()
+    f.limit:SetPoint("TOPLEFT", f, "TOPLEFT", COL - 16, limitY + 8)
+    f.dupes:ClearAllPoints()
+    f.dupes:SetPoint("TOPLEFT", f, "TOPLEFT", dupesX, dupesY + 4)
     f.hrLabel:ClearAllPoints()
     f.hrLabel:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, hrY)
     f.hr:ClearAllPoints()
@@ -809,7 +826,7 @@ local function layout(f, settings)
     f.prev:SetPoint("TOPLEFT", f, "TOPLEFT", COL + 88, rowY + 8)
     f.status:ClearAllPoints()
     f.status:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, statusY)
-    f:SetHeight(settings and 236 or H)
+    f:SetHeight(settings and 268 or H)
     f.create:SetText(settings and "Save" or "Create event")
 end
 
@@ -901,10 +918,10 @@ function RB.OpenEventSettings()
     f.mode = s.ref
     f.title:SetText("Event settings: " .. s.ref)
     layout(f, true)
-    local unread = "raidres's SR+ settings for this event couldn't be read, so Save " ..
-        "leaves SR+ as it is there unless you change it here."
+    local unread = "raidres's settings for this event couldn't be read, so Save " ..
+        "leaves reserves each, the same item twice and SR+ as they are there unless you change them here."
     if RB.Http and RB.Http() then
-        note("Reading SR+ from raidres...", UI.GOLD)
+        note("Reading the settings from raidres...", UI.GOLD)
         RB.HttpEventSettings(s.ref, function(now, why)
             local e = RB.eventForm
             if not e or f.mode ~= s.ref or e.known then return end
@@ -917,6 +934,8 @@ function RB.OpenEventSettings()
             if not set.srplus then e.srplus = now.srplus end
             if not set.prev then e.prev = now.prev end
             if not set.inc then e.inc = now.inc end
+            if not set.limit and now.limit then e.limit, e.limitRead = now.limit, true end
+            if not set.dupes and now.dupes ~= nil then e.dupes = now.dupes end
             e.known = true
             note("")
             RB.DrawNewEvent()

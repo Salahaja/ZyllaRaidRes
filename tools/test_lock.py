@@ -97,6 +97,8 @@ check("a short command is refused before Chrome", w.create_event(["95", "2026-11
 check("a bad setting is refused before Chrome", w.event_settings(["DEMO42", "srplus=maybe"]),
       "error: srplus must be 0 or 1")
 check("so is an unknown one", w.event_settings(["DEMO42", "admins=all"]), "error: bad setting: 'admins=all'")
+check("reserves each must be 1 or more", w.event_settings(["DEMO42", "limit=0"]), "error: reserves each out of range")
+check("the same item twice is 0 or 1", w.event_settings(["DEMO42", "dupes=yes"]), "error: dupes must be 0 or 1")
 check("an admin change must say which way", w.set_admin(["DEMO42", "Brisa", "maybe"]), "error: bad command")
 check("and a name, not a path", w.set_admin(["DEMO42", "../x", "add"]), "error: bad character name: '../x'")
 check("a saved account must be digits", w.set_admin(["DEMO42", "Brisa", "add", "id=12ab"]),
@@ -299,9 +301,30 @@ try:
     answer, sent = run(args(FREE, "Wirelock", cls="Warrior", spec="WarriorFury") | {"forOther": True},
                        event=copy.deepcopy(OPEN) | {"isAuthor": False, "extraAdministratorUserIds": ["1000"]})
     check("an admin of it may", answer["result"], "ok")
-    answer, sent = run(args(FREE, "Brisa", cls="Priest", spec="PriestHoly") | {"forOther": True}, event=owner)
-    check("not over someone who signed up themselves", (answer.get("message"), sent),
-          ("Brisa signed up on raidres themselves; they change it there", []))
+    # someone who signed up themselves: an item more beside theirs, as the
+    # site lets an admin add one, counted with theirs, in their class and spec
+    brisa_rows = [r for r in OPEN["reservations"] if r["character"]["name"] == "Brisa"]
+    brisa_cls = brisa_rows[0]["character"]["class"]
+    brisa_spec = brisa_rows[0]["character"]["specialization"]
+    brisa_free = next(g for i, g in GAME_ID.items() if i not in [r["raidItemId"] for r in brisa_rows])
+    answer, sent = run(args(brisa_free, "Brisa", cls=brisa_cls, spec=brisa_spec) | {"forOther": True},
+                       event=owner)
+    check("their own count toward the limit", (answer.get("message"), sent),
+          ("Brisa already has %d of %d reserved" % (len(brisa_rows), OPEN["reservationLimit"]), []))
+    roomy = copy.deepcopy(owner) | {"reservationLimit": len(brisa_rows) + 1}
+    answer, sent = run(args(brisa_free, "Brisa", cls=brisa_cls) | {"forOther": True}, event=roomy)
+    check("with room, an owner adds one beside theirs", answer["result"], "ok")
+    check("as one for another player, in the class and spec they signed up with",
+          (sent[0]["body"]["characterName"], sent[0]["body"]["isTemporary"],
+           sent[0]["body"]["characterClass"], sent[0]["body"]["specialization"]),
+          ("Brisa", True, brisa_cls, brisa_spec))
+    answer, sent = run(args(brisa_free, "Brisa", cls="Warrior", spec="WarriorFury") | {"forOther": True},
+                       event=roomy)
+    check("not in another class", (answer.get("message"), sent),
+          ("Brisa is signed up as %s" % brisa_cls, []))
+    answer, sent = run(args(GAME_ID[brisa_rows[0]["raidItemId"]], "Brisa", cls=brisa_cls) | {"forOther": True},
+                       event=roomy | {"allowDuplicateReservation": False})
+    check("nor one they hold already", (answer.get("message"), sent), ("Brisa already has that reserved", []))
     made = copy.deepcopy(owner)
     made["reservations"].append({"id": 777, "raidItemId": RAIDRES_ID[FREE], "comment": None, "srPlus": None,
         "character": {"name": "Wirelock", "class": "Warrior", "specialization": "WarriorFury", "isTemporary": True},
@@ -446,6 +469,13 @@ try:
     answer, sent = run({"ref": "DEMO42", "sr": False}, script=w._SETTINGS_JS, event=mine,
                        reply={"status": 200, "body": {}})
     check("SR+ off alone touches nothing else", sent[0]["body"], {"reference": "DEMO42", "allowSrPlus": False})
+    answer, sent = run({"ref": "DEMO42", "limit": 3, "dupes": True}, script=w._SETTINGS_JS, event=mine,
+                       reply={"status": 200, "body": {}})
+    check("reserves each and the same item twice go as raidres names them", sent[0]["body"],
+          {"reference": "DEMO42", "reservationLimit": 3, "allowDuplicateReservation": True})
+    answer, sent = run({"ref": "DEMO42", "dupes": False}, script=w._SETTINGS_JS, event=mine,
+                       reply={"status": 200, "body": {}})
+    check("one alone leaves the other", sent[0]["body"], {"reference": "DEMO42", "allowDuplicateReservation": False})
     answer, sent = run({"ref": "DEMO42", "hr": [], "sr": False}, script=w._SETTINGS_JS, event=mine,
                        reply={"status": 200, "body": {}})
     check("clearing HRs keeps the notes", [h["note"] for h in sent[0]["body"]["advancedHrItems"]], ["MS > OS"])
