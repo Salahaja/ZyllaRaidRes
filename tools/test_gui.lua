@@ -622,6 +622,145 @@ click(visible(f.lRows)[1])
 check("clicking again unfolds it", visible(f.lRows)[2].data.item ~= nil, true)
 check("the same boss", visible(f.lRows)[1].data.header, bossName)
 
+-- ================================================================== sorting the loot
+print("sorting the loot, as raidres does")
+do
+    -- Every row, not just the 17 on screen: what drawLoot asked for.
+    local function allRows()
+        return RB.ItemRows(RB.raid, { sort = RB.LootSort(), show = RB.LootShow(), hard = f.snap.hard })
+    end
+    local function itemsOf(rows)
+        local out = {}
+        for _, r in ipairs(rows) do if r.item then table.insert(out, r.item) end end
+        return out
+    end
+    local function ordered(items, down)
+        for i = 2, table.getn(items) do
+            local a, b = string.lower(items[i - 1].n), string.lower(items[i].n)
+            if (down and a < b) or (not down and a > b) then return false end
+        end
+        return true
+    end
+    local function menuValue(v)
+        for _, info in ipairs(MENU) do if info.value == v then return info end end
+    end
+    local raid = RaidResBridge_Raids[RB.raid]
+    local places, shared = {}, 0
+    for _, it in ipairs(raid.items) do
+        if it.o == 999 then shared = shared + 1 else places[it.b] = it.o end
+    end
+
+    check("by boss is the default", f.lootSort:GetText(), "By boss")
+    local rows = allRows()
+    local heads, lastPlace, inOrder, sortedWithin = {}, -1, true, true
+    local run = {}
+    for _, r in ipairs(rows) do
+        if r.header then
+            table.insert(heads, r.header)
+            if not ordered(run) then sortedWithin = false end
+            run = {}
+            local p = places[r.header]
+            if p then
+                if p < lastPlace then inOrder = false end
+                lastPlace = p
+            end
+        else
+            table.insert(run, r.item)
+        end
+    end
+    if not ordered(run) then sortedWithin = false end
+    check("bosses come in kill order", inOrder, true)
+    check("A to Z within each boss", sortedWithin, true)
+    check("loot more than one boss drops comes last, under Shared", heads[table.getn(heads)], "Shared")
+    local underShared = 0
+    for i = table.getn(rows), 1, -1 do
+        if rows[i].header then break end
+        underShared = underShared + 1
+    end
+    check("all of it", underShared, shared)
+    check("the window draws the same rows", visible(f.lRows)[1].data.header, heads[1])
+
+    click(f.lootSort)
+    check("Sort opens its menu", f.lootSortMenu.ddOpen, true)
+    check("with by boss ticked", menuValue("boss").checked, 1)
+    pick(menuValue("az"))
+    rows = allRows()
+    check("A to Z is one list, no headings", table.getn(itemsOf(rows)), table.getn(rows))
+    check("A to Z", ordered(itemsOf(rows)), true)
+    check("and every item is there", table.getn(rows), table.getn(raid.items))
+    check("the button says so", f.lootSort:GetText(), "A to Z")
+    check("and it's kept", RaidResBridge_Options.lootSort, "az")
+    click(f.lootSort)
+    pick(menuValue("za"))
+    check("Z to A", ordered(itemsOf(allRows()), true), true)
+    click(f.lootSort)
+    pick(menuValue("boss"))
+    check("and back to by boss", allRows()[1].header ~= nil, true)
+
+    print("showing only some kinds of loot")
+    local function kinds(k)
+        local n = 0
+        for _, it in ipairs(raid.items) do
+            if string.find(" " .. (it.t or "") .. " ", " " .. k .. " ", 1, true) then n = n + 1 end
+        end
+        return n
+    end
+    click(f.lootShow)
+    check("Show opens its menu", f.lootShowMenu.ddOpen, true)
+    check("raidres's kinds, in its order",
+        menuValue("cloth") and menuValue("weapon") and menuValue("back") and menuValue("hr")
+        and menuValue("back").text, "Cape")
+    check("all of them, to start", menuValue("all").checked, 1)
+    check("ticks stay open, to pick several", menuValue("plate").keepShownOnClick, 1)
+    pick(menuValue("plate"))
+    check("plate only", table.getn(itemsOf(allRows())), kinds("plate"))
+    check("the button says what shows", f.lootShow:GetText(), "Plate")
+    click(f.lootShow)
+    check("plate is ticked", menuValue("plate").checked, 1)
+    pick(menuValue("mail"))
+    check("plate or mail", table.getn(itemsOf(allRows())), kinds("plate") + kinds("mail"))
+    check("the first of them in the menu's order, and how many more", f.lootShow:GetText(), "Mail +1")
+    check("it's kept", RaidResBridge_Options.lootShow.mail, true)
+    click(f.lootShow)
+    pick(menuValue("all"))
+    check("All shows everything again", table.getn(itemsOf(allRows())), table.getn(raid.items))
+    check("and the button says so", f.lootShow:GetText(), "All items")
+    check("with nothing kept", RaidResBridge_Options.lootShow, nil)
+
+    local hard = 0
+    for _, it in ipairs(raid.items) do if f.snap.hard[it.g] then hard = hard + 1 end end
+    click(f.lootShow)
+    pick(menuValue("hr"))
+    check("hard reserved only", table.getn(itemsOf(allRows())), hard)
+    check("there is one in the list", hard > 0, true)
+    click(f.lootShow)
+    pick(menuValue("weapon"))
+    check("hard reserved and a weapon: nothing here", visible(f.lRows)[1], nil)
+    check("and the pane says why",
+        string.find(f.lEmpty:GetText(), "matches Show: Weapon/Shield +1", 1, true) ~= nil, true)
+    click(f.lootShow)
+    pick(menuValue("all"))
+
+    -- a loot table cached before kinds were kept
+    local saved = raid.items
+    local old = {}
+    for _, it in ipairs(saved) do
+        table.insert(old, { g = it.g, n = it.n, q = it.q, b = it.b, c = it.c })
+    end
+    raid.items = old
+    RB.Refresh()
+    check("an older loot table keeps its bosses", allRows()[1].header ~= nil, true)
+    click(f.lootShow)
+    check("can't be shown by kind", menuValue("plate").disabled, 1)
+    check("hard reserved still can", menuValue("hr").disabled, nil)
+    FILES["RaidResBridge_request.txt"] = nil
+    pick(menuValue("update"))
+    check("and the menu offers the update", FILES["RaidResBridge_request.txt"], "RAIDS")
+    raid.items = saved
+    RaidResBridge_Options.lootSort = nil
+    RB.Refresh()
+end
+
 -- ================================================================== sorting
 print("column headers")
 click(f.colName)
@@ -1745,7 +1884,7 @@ SlashCmdList.RAIDRESBRIDGE("")
 f = RB.gui
 check("pfUI skins it", f.pfui, true)
 check("its frame and three boxes", CALLS.CreateBackdrop >= 4, true)
-check("its seven buttons, the RollFor box's included", CALLS.SkinButton, 7)
+check("its nine buttons, the RollFor box's and the loot's Sort and Show included", CALLS.SkinButton, 9)
 check("both checkboxes", CALLS.SkinCheckbox, 2)
 check("the dropdown", CALLS.SkinDropDown, 1)
 check("both scroll bars", CALLS.SkinScrollbar, 2)

@@ -422,8 +422,10 @@ local rows = RB.ItemRows(100)
 --[[ Flattened to header-then-items so the scroll offset stays a plain index.
      Two bosses and three items is five rows. ]]
 check("the loot comes back grouped by boss", table.getn(rows), 5)
+--[[ This table predates kill order (no `o`), so its bosses keep the order
+     the table had them in; within a boss it's A to Z, as on raidres. ]]
 check("a header leads", rows[1].header, "Hakkar")
-check("then its items", rows[2].item.n, "Heart of Hakkar")
+check("then its items, A to Z", rows[2].item.n .. ", " .. rows[3].item.n, "Another Thing, Heart of Hakkar")
 check("and the next boss follows its own", rows[4].header, "Jeklik")
 check("an unknown raid gives nothing", table.getn(RB.ItemRows(999)), 0)
 

@@ -233,16 +233,93 @@ function RB.Convert(ref, event, raid)
     }
 end
 
+--[[ raidres's item-select filters, in its order: each matches an item whose
+     tooltip has one of these words as a whole tag's text (">Plate</"). The
+     site's own list, so "Plate" shows here exactly what it shows there; the
+     watcher's raidres_bridge.py holds the same, and the tests hold the two
+     to each other. ]]
+local PROFESSIONS = { "Alchemy", "Blacksmithing", "Cooking", "Enchanting", "Engineering",
+    "First Aid", "Fishing", "Herbalism", "Jewelcrafting", "Leatherworking", "Mining",
+    "Skinning", "Tailoring" }
+local ITEM_TYPES = {
+    { "cloth", { "Cloth" } },
+    { "leather", { "Leather" } },
+    { "mail", { "Mail" } },
+    { "plate", { "Plate" } },
+    { "weapon", { "Arrow", "Bullet", "Held In Off-Hand", "Main Hand", "Off Hand",
+                  "One-hand", "Ranged", "Thrown", "Two-hand" } },
+    { "neck", { "Neck" } },
+    { "back", { "Back" } },
+    { "ring", { "Finger" } },
+    { "trinket", { "Trinket" } },
+    { "profession", { "Enchanting Bag", "Explosive", "Fishing Pole", "Herb Bag" } },
+    { "class", { "Ammo Pouch", "Bag", "Book", "Idol", "Libram", "Part", "Quiver",
+                 "Reagent", "Relic", "Soul Bag", "Totem", "Classes: " } },
+}
+for _, p in ipairs(PROFESSIONS) do table.insert(ITEM_TYPES[10][2], "Requires " .. p) end
+local SHARED = 999      -- raidres's position for loot more than one boss drops
+
+--[[ Does the tooltip have a "Requires" line that isn't a level -- a
+     profession's recipe? The site's /requires (?!level 1-120\b)/, by hand:
+     Lua 5.0's patterns have no look-ahead. ]]
+local function requiresOther(tt)
+    local from = 1
+    while true do
+        local _, e = string.find(tt, ">requires ", from, true)
+        if not e then return false end
+        local _, _, digits = string.find(tt, "^level (%d+)", e + 1)
+        local after = digits and string.sub(tt, e + 7 + string.len(digits), e + 7 + string.len(digits))
+        local level = digits and string.sub(digits, 1, 1) ~= "0" and tonumber(digits) <= 120
+            and not string.find(after, "[%w_]")
+        if not level then return true end
+        from = e + 1
+    end
+end
+
+--- The ITEM_TYPES keys an item's tooltip matches, space-separated.
+function RB.ItemTypes(tooltip)
+    if type(tooltip) ~= "string" then return "" end
+    local tt = string.lower(tooltip)
+    local other = requiresOther(tt)
+    local out = {}
+    for _, kind in ipairs(ITEM_TYPES) do
+        for _, word in ipairs(kind[2]) do
+            local w = string.lower(word)
+            local hit
+            if string.find(w, "requires ", 1, true) then
+                hit = other and (string.find(tt, ">" .. w .. "</", 1, true)
+                                 or string.find(tt, ">" .. w .. " (", 1, true))
+            else
+                hit = not other and string.find(tt, ">" .. w .. "</", 1, true)
+            end
+            if hit then
+                table.insert(out, kind[1])
+                break
+            end
+        end
+    end
+    return table.concat(out, " ")
+end
+
 --- One raid's loot table, in the shape the window's picker reads.
 function RB.ConvertRaid(raid)
-    local bosses = {}
-    for _, b in ipairs(raid.raidBosses or {}) do bosses[b.id] = b.name or "?" end
+    local bosses, places = {}, {}
+    for _, b in ipairs(raid.raidBosses or {}) do
+        bosses[b.id] = b.name or "?"
+        places[b.id] = b.position or 0
+    end
     local items = {}
     for _, it in ipairs(raid.raidItems or {}) do
-        local first = it.raidBosses and it.raidBosses[1]
+        local droppedBy = it.raidBosses or {}
+        local first = droppedBy[1]
+        -- where it sorts: its boss's place in the kill order, or SHARED when
+        -- more than one boss drops it, as on raidres
+        local place = SHARED
+        if table.getn(droppedBy) <= 1 and first and places[first] then place = places[first] end
         table.insert(items, {
             g = it.gameDbItemId, n = it.name or "?", q = it.quality or 4,
             b = (first and bosses[first]) or "", c = it.characterClasses or {},
+            o = place, t = RB.ItemTypes(it.tooltip),
         })
     end
     return { name = raid.name or "?", items = items }
