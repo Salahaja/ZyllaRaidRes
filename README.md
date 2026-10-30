@@ -323,19 +323,24 @@ boss by boss in kill order, A to Z within each boss. Loot that more than one
 boss drops comes last, under *Shared*. Items are coloured by quality, with
 icons once the game has seen an item, and who holds each item is shown beside
 it.
-- **Bosses** (above the loot, on the right): *All bosses*, or one of the raid's
-  own bosses in kill order, then its trash and *Shared*, as its loot table has
-  them, so that boss's loot alone shows, A to Z. The pick is kept for each raid.
-  A search still looks through every boss, and the button says *All: searching*
-  while it does.
-- **Show** (beside Bosses): only some kinds of loot, using the same filters as
+- **Sort** (above the loot, on the right): *By boss*, *A to Z* or *Z to A*.
+  The last two give one list with no boss headings.
+- **Bosses** (beside Sort): tick one boss or several, or the trash or
+  *Shared*, to see only their loot. The list is the raid's own bosses in kill
+  order, from its loot table. Ticks are kept for each raid, and work with every
+  Sort. A search still looks through every boss, and the button says
+  *All: search* while it does.
+- **Show** (beside Sort): only some kinds of loot, using the same filters as
   raidres's item picker: *Cloth*, *Leather*, *Mail*, *Plate*,
   *Weapon/Shield*, *Neck*, *Cape*, *Ring*, *Trinket*, *Profession*,
   *Class* and *Hard reserved*. Tick several to see any of them; the menu stays
   open while you tick. The button says what's showing, e.g. *Plate +1*. Each
   kind matches the same words in the item's raidres tooltip that the site
   matches, so a kind shows the same items here as there. Both choices are
-  remembered.
+  remembered. *Class* has a side list of the nine classes: tick one or two to
+  see only those classes' class items (*Class: Paladin*). Librams, idols and
+  totems go by their names, since raidres lists no class for them; an item the
+  table can't place, such as a bag, isn't hidden.
 
   Loot tables cached by an older version don't have kinds yet. *Show* says so and
   offers *Update loot tables*.
@@ -350,7 +355,7 @@ it.
   3. **Choosing from the dropdown** stands until one of those changes. Everyone
      leaving a raid doesn't change it.
 
-  The *Loot* label says which it went by: *you're here*, *3 of your raid are
+  The *Loot* label says which it went by: *you're here*, *raid: 3
   here*, or *the list's raid*.
   Raid zones are named after their raids, apart from AQ40 (zone *Ahn'Qiraj*)
   and UBRS (zone *Blackrock Spire*), which it knows. World bosses are left to
