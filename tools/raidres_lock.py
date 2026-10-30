@@ -500,6 +500,19 @@ async (a) => {
     && r.character && String(r.character.name).toLocaleLowerCase() === name);
   const held = mine.filter(r => r.raidItemId !== null);
 
+  // For another player: raidres's own "This reservation is for another
+  // player" (isTemporary), which only the list's owner and admins have.
+  // Theirs are filed under you, so "mine" above is right for them too.
+  if (a.forOther) {
+    const admins = (e.extraAdministratorUserIds || []).map(String);
+    if (e.isAuthor === false && !admins.includes(String(who)))
+      return answer({ result: 'error', message: "only the list's owner or its admins can reserve for others" });
+    const theirOwn = (e.reservations || []).some(r => r.character && r.user
+      && String(r.character.name).toLocaleLowerCase() === name && String(r.user.id) !== String(who));
+    if (theirOwn && !a.remove)
+      return answer({ result: 'error', message: a.name + ' signed up on raidres themselves; they change it there' });
+  }
+
   if (a.remove) {
     const row = held.filter(r => ids.includes(r.raidItemId)).pop();
     if (!row) return answer({ result: 'error', message: a.name + " hasn't reserved that on raidres" });
@@ -520,7 +533,7 @@ async (a) => {
   // The spec: the one already signed up with, else the saved character's,
   // else the game's pick -- and with none of those, ask the game for one.
   let spec = (mine.find(r => r.character.specialization) || { character: {} }).character.specialization;
-  if (!spec) {
+  if (!spec && !a.forOther) {
     const chars = await get('/api/user-characters');
     const list = Array.isArray(chars.body) ? chars.body : ((chars.body && chars.body.data) || []);
     const saved = list.find(c => c && String(c.name).toLocaleLowerCase() === name && c.class === a.cls);
@@ -530,7 +543,7 @@ async (a) => {
   if (!spec) return answer({ result: 'needspec' });
 
   const body = { reference: e.reference, characterName: signedUp ? signedUp.character.name : a.name,
-    characterClass: a.cls, specialization: spec, isTemporary: false, raidItemIds: [ids[0]], comment: '' };
+    characterClass: a.cls, specialization: spec, isTemporary: !!a.forOther, raidItemIds: [ids[0]], comment: '' };
   if (a.dry) return answer({ result: 'plan', method: 'POST', body, me: who, held: held.length,
     limit: e.reservationLimit });
   return (await send('/api/raid-event-reservations', 'POST', body)).fail
@@ -570,7 +583,7 @@ def reserve_line(answer):
         return "plan " + json.dumps(answer)
     return "error: " + (answer.get("message") or "raidres didn't say why")
 
-def reserve(ref, item, name, cls, spec=None, remove=False, dry=False):
+def reserve(ref, item, name, cls, spec=None, remove=False, dry=False, for_other=False):
     try:
         item = check_reserve(ref, item, name, cls, spec, remove)
     except ValueError as e:
@@ -584,7 +597,7 @@ def reserve(ref, item, name, cls, spec=None, remove=False, dry=False):
         if not tab or not tab.get("webSocketDebuggerUrl"):
             return "error: could not open a raidres tab in Chrome"
     args = {"ref": ref, "item": item, "name": name, "cls": cls, "spec": spec,
-            "remove": bool(remove), "dry": bool(dry)}
+            "remove": bool(remove), "dry": bool(dry), "forOther": bool(for_other)}
     ws = WebSocket(tab["webSocketDebuggerUrl"])
     try:
         # The arguments go in as JSON: nothing the game sent can become code.
@@ -1107,15 +1120,20 @@ def watch(parent=None):
                     continue
 
                 # reserve REF ITEM NAME CLASS [SPEC]  /  unreserve REF ITEM NAME
-                if words and words[0] in ("reserve", "unreserve"):
-                    remove = words[0] == "unreserve"
-                    if (remove and len(words) != 4) or (not remove and len(words) not in (5, 6)):
+                # reserve-for REF ITEM NAME CLASS SPEC  /  unreserve-for REF ITEM NAME:
+                # the same for another player, as an admin (spec required)
+                if words and words[0] in ("reserve", "unreserve", "reserve-for", "unreserve-for"):
+                    for_other = words[0].endswith("-for")
+                    remove = words[0].startswith("unreserve")
+                    sizes = (4,) if remove else ((6,) if for_other else (5, 6))
+                    if len(words) not in sizes:
                         result = "error: bad command"
                     else:
                         log("%s ..." % line)
                         result = reserve(words[1], words[2], words[3],
                                          None if remove else words[4],
-                                         words[5] if len(words) == 6 else None, remove=remove)
+                                         words[5] if len(words) == 6 else None, remove=remove,
+                                         for_other=for_other)
                     log("  -> %s" % result)
                     with open(result_path, "w", encoding="utf-8") as f:
                         f.write(result)

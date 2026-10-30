@@ -259,6 +259,34 @@ try:
                        reply={"status": 429, "body": {"error": "be nice"}})
     check("its spam guard too", answer["message"], "be nice")
 
+    print("for another player")
+    owner = copy.deepcopy(OPEN) | {"isAuthor": True}
+    answer, sent = run(args(FREE, "Wiredbro", cls="Warrior", spec="WarriorFury") | {"forOther": True},
+                       event=owner)
+    check("an owner reserves for another player", answer["result"], "ok")
+    check("as raidres's own 'for another player' switch",
+          (sent[0]["body"]["characterName"], sent[0]["body"]["isTemporary"], sent[0]["body"]["specialization"]),
+          ("Wiredbro", True, "WarriorFury"))
+    answer, sent = run(args(FREE, "Wiredbro", cls="Warrior") | {"forOther": True}, event=owner)
+    check("their spec is asked for, not looked up as yours", answer, {"result": "needspec"})
+    answer, sent = run(args(FREE, "Wiredbro", cls="Warrior", spec="WarriorFury") | {"forOther": True},
+                       event=copy.deepcopy(OPEN) | {"isAuthor": False})
+    check("not for someone who doesn't run the list", (answer.get("message"), sent),
+          ("only the list's owner or its admins can reserve for others", []))
+    answer, sent = run(args(FREE, "Wiredbro", cls="Warrior", spec="WarriorFury") | {"forOther": True},
+                       event=copy.deepcopy(OPEN) | {"isAuthor": False, "extraAdministratorUserIds": ["1000"]})
+    check("an admin of it may", answer["result"], "ok")
+    answer, sent = run(args(FREE, "Brisa", cls="Priest", spec="PriestHoly") | {"forOther": True}, event=owner)
+    check("not over someone who signed up themselves", (answer.get("message"), sent),
+          ("Brisa signed up on raidres themselves; they change it there", []))
+    made = copy.deepcopy(owner)
+    made["reservations"].append({"id": 777, "raidItemId": RAIDRES_ID[FREE], "comment": None, "srPlus": None,
+        "character": {"name": "Wiredbro", "class": "Warrior", "specialization": "WarriorFury", "isTemporary": True},
+        "user": {"id": "1000"}})
+    answer, sent = run(args(FREE, "Wiredbro", remove=True) | {"forOther": True}, event=made)
+    check("and one you made for them comes back off", [(x["method"], x["url"]) for x in sent],
+          [("DELETE", "/api/raid-event-reservations/777")])
+
     print("taking one back")
     answer, sent = run(args(HELD, "Aldwyn", remove=True), event=OPEN)
     held_row = next(r["id"] for r in EVENT["reservations"]

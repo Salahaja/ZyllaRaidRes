@@ -557,6 +557,15 @@ editor's checkbox does. It makes the same request that editor makes, so only
 the list's owner and its admins can; raidres says so if you can't. The list
 is fetched again afterwards.
 
+**Reserving for someone who can't use the site**: right-click them in the
+Players list and tick **Reserve on raidres for them**, or pick **Add someone
+not listed...** and give their name and class. Their loot clicks then go to
+raidres as raidres's own "This reservation is for another player". It asks for
+their spec once, and the X takes their reserve back off. That option is only
+for the list's owner and its admins, and the reserve is filed under your
+raidres account, so they can't change it on the site; you and the list's admins
+can. Someone who signed up on raidres themselves is left to change their own.
+
 From a terminal, `tools/raidres_lock.py create` does the same, and `--dry-run`
 shows what it would send:
 
@@ -590,8 +599,8 @@ failure.
 ```bash
 lua tools/test_bridge.lua   # lists, the merge, typed reserves, names   (139)
 lua tools/test_http.lua     # the in-game fetch, against a stand-in DLL (134)
-lua tools/test_gui.lua      # the window, minimap, RollFor box, events  (524)
-python tools/test_lock.py   # reserving and events, in a throwaway Chrome (89)
+lua tools/test_gui.lua      # the window, minimap, RollFor box, events  (547)
+python tools/test_lock.py   # reserving and events, in a throwaway Chrome (96)
 lua tools/vanilla_lint.lua RaidResBridge.lua Http.lua Names.lua Manual.lua Gui.lua Event.lua Minimap.lua Chat.lua
 ```
 

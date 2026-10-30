@@ -1831,6 +1831,91 @@ f.srMenu.ddOpen = nil
 fire(srRow, "OnClick", "RightButton")
 check("a list without SR+ offers nothing", f.srMenu.ddOpen, nil)
 
+-- ================================================================== reserving for someone else
+print("reserving on raidres for someone else")
+RB = world()
+RaidResLockReady = function() return 1 end
+SlashCmdList.RAIDRESBRIDGE("")
+f = RB.gui
+RB.SetLock("DEMO42", false)
+NOW = NOW + 5
+RB.Refresh()
+local CMD4, RESULT4 = "RaidResBridge_lock_cmd.txt", "RaidResBridge_lock_result.txt"
+local zed = findRow(f.pRows, "Zed")
+enter(zed)
+check("a player's tooltip offers it", tipHas("Right-click: reserve on raidres for them"), true)
+fire(zed, "OnClick", "RightButton")
+check("right-click opens their menu", f.playerMenu.ddOpen, true)
+local toggleFor
+for _, info in ipairs(MENU) do if info.value == "toggle" then toggleFor = info end end
+check("with a tick to reserve on raidres for them", toggleFor and plain(toggleFor.text), "Reserve on raidres for them")
+pick(toggleFor)
+check("ticked, they are picked", RB.player, "Zed")
+check("and the hint says what that means",
+    string.find(hint(f), "On raidres for Zed (2 left), filed under your account", 1, true) ~= nil, true)
+local zedItem = firstItemRow(f)
+local zedId = zedItem.data.item.g
+FILES[CMD4] = nil
+click(zedItem)
+check("their spec is asked for first", f.specMenu.ddOpen, true)
+check("from their class's list", MENU[1] and plain(MENU[1].text), "Zed's rogue spec on raidres")
+check("and nothing is sent yet", FILES[CMD4], nil)
+pick(MENU[3])
+check("then it goes to raidres for them", FILES[CMD4], "reserve-for DEMO42 " .. zedId .. " Zed Rogue RogueDaggers")
+check("not typed here", RaidResBridge_Manual.zed, nil)
+check("their spec is kept", RaidResBridge_Spec and RaidResBridge_Spec.zed, "RogueDaggers")
+FILES["RaidResBridge_request.txt"] = nil
+FILES[RESULT4] = "ok reserved RogueDaggers"
+run(1)
+check("done: fetched again", FILES["RaidResBridge_request.txt"], "DEMO42")
+-- raidres now has it under Zed: the X takes it back as theirs
+loadstring(slurp(DIR .. "RaidResBridge_data.lua"))()
+local withZed = RaidResBridge_Data
+table.insert(withZed.softreserves, { name = "Zed", role = "", items = { { id = zedId, quality = 4 } } })
+RB.fetched = { unsaved = true, ref = "DEMO42", data = withZed }
+RB.waiting = nil
+RB.Refresh()
+check("theirs on raidres can be taken back here", f.dRows[1].remove:IsShown(), true)
+click(f.dRows[1].remove)
+check("as theirs", FILES[CMD4], "unreserve-for DEMO42 " .. zedId .. " Zed")
+FILES[RESULT4] = "error: Zed signed up on raidres themselves; they change it there"
+run(1)
+check("raidres's no in its words",
+    string.find(hint(f), "raidres: Zed signed up on raidres themselves", 1, true) ~= nil, true)
+
+print("someone not listed")
+fire(zed, "OnClick", "RightButton")
+local addEntry
+for _, info in ipairs(MENU) do if info.value == "add" then addEntry = info end end
+pick(addEntry)
+check("asks their name", POPUP and POPUP.which, "ZYLLARAIDRES_ADDPLAYER")
+RB.AddPlayerNamed("wired bro1")
+check("not a name with digits", string.find(hint(f), "isn't a character name", 1, true) ~= nil, true)
+RB.AddPlayerNamed("wiredbro")
+check("then their class", f.classMenu.ddOpen, true)
+pick(entry(MENU, "WARRIOR"))
+check("added, ticked and picked", RB.player .. " " .. tostring(RB.forOthers.wiredbro), "Wiredbro true")
+check("and on the list", findRow(f.pRows, "Wiredbro") ~= nil or (function()
+    for _, p in ipairs(f.snap.players) do if p.name == "Wiredbro" then return true end end
+    return false end)(), true)
+RaidResBridge_Spec.wiredbro = "WarriorFury"
+FILES[CMD4] = nil
+click(firstItemRow(f))
+check("their picks go to raidres with their class and spec",
+    string.find(FILES[CMD4] or "", " Wiredbro Warrior WarriorFury", 1, true) ~= nil, true)
+FILES[RESULT4] = "ok reserved WarriorFury"
+run(1)
+
+print("and not for yourself, or without the helper")
+fire(findRow(f.pRows, "Tester"), "OnClick", "RightButton")
+local selfToggle
+for _, info in ipairs(MENU) do if info.value == "toggle" then selfToggle = info end end
+check("your own row has no for-someone tick", selfToggle, nil)
+RaidResLockReady = nil
+f.playerMenu.ddOpen = nil
+fire(zed, "OnClick", "RightButton")
+check("without the helper, no menu", f.playerMenu.ddOpen, nil)
+
 -- ================================================================== SR+ in the window
 print("SR+ beside each reserve")
 RB = world()

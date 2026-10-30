@@ -721,19 +721,21 @@ end
 
 local RESERVE_TIMEOUT = 45
 
-function RB.SendReserveCommand(ref, itemId, name, class, spec, remove)
+-- forOther: as the list's admin, for another player (reserve-for / unreserve-for)
+function RB.SendReserveCommand(ref, itemId, name, class, spec, remove, forOther)
     if not RB.LockControlReady() or RB.HelperBusy() then return false end
+    local verb = (remove and "unreserve" or "reserve") .. (forOther and "-for" or "")
     local cmd
     if remove then
-        cmd = "unreserve " .. ref .. " " .. itemId .. " " .. name
+        cmd = verb .. " " .. ref .. " " .. itemId .. " " .. name
     else
-        cmd = "reserve " .. ref .. " " .. itemId .. " " .. name .. " " .. class ..
+        cmd = verb .. " " .. ref .. " " .. itemId .. " " .. name .. " " .. class ..
             (spec and (" " .. spec) or "")
     end
     pcall(WriteCustomFile, LOCK_RESULT, "", "w")
     if not pcall(WriteCustomFile, LOCK_CMD, cmd, "w") then return false end
     RB.reservePending = { ref = ref, item = itemId, name = name, class = class,
-                          remove = remove, sent = GetTime() }
+                          remove = remove, forOther = forOther, sent = GetTime() }
     lockTick:Show()
     return true
 end

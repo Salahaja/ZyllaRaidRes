@@ -181,6 +181,8 @@ function RB.Players(snap)
 
     for _, r in ipairs(RB.Roster()) do add(r.name, r.class, true) end
     for _, p in ipairs(data.softreserves or {}) do add(p.name, nil, false) end
+    -- added in this window, to reserve on raidres for them
+    for _, x in pairs(RB.extraPlayers or {}) do add(x.name, x.class, false) end
 
     local limit = RB.Limit()
     if RB.playerSort == "name" then
@@ -710,7 +712,11 @@ local function onPickSpec()
     RB.askSpec = nil
     RaidResBridge_Spec = RaidResBridge_Spec or {}
     RaidResBridge_Spec[key(ask.name)] = this.value
-    RB.ReserveOnRaidres(ask.item, false, this.value)
+    if ask.other then
+        RB.ReserveForOther(ask.item, false, this.value)
+    else
+        RB.ReserveOnRaidres(ask.item, false, this.value)
+    end
 end
 
 --[[ raidres needs a specialization for a first reserve, and has none for
@@ -719,10 +725,12 @@ end
 function RB.InitSpecMenu()
     local ask = RB.askSpec
     local _, token = UnitClass("player")
+    token = (ask and ask.class) or token
     local list = SPECS[token or ""]
     if not ask or not list then return end
     local info = {}
-    info.text = "Your " .. string.lower(raidresClass(token)) .. " spec on raidres"
+    info.text = (ask.other and (ask.name .. "'s ") or "Your ") ..
+        string.lower(raidresClass(token)) .. " spec on raidres"
     info.isTitle = 1
     UIDropDownMenu_AddButton(info)
     for i = 1, table.getn(list) do
@@ -747,7 +755,8 @@ function RB.OnReserveResult(pending, text)
             " on raidres. Fetching the list again...")
         RB.Request(pending.ref)
     elseif text == "needspec" then
-        RB.askSpec = { item = pending.item, name = pending.name }
+        RB.askSpec = { item = pending.item, name = pending.name, other = pending.forOther,
+                       class = pending.forOther and RB.ClassOf(pending.name) or nil }
         local f = RB.gui
         if f and f.specMenu then ToggleDropDownMenu(1, nil, f.specMenu, "cursor") end
         RB.Notice("pick your spec: raidres needs it for your first reserve.")
@@ -759,6 +768,198 @@ function RB.OnReserveResult(pending, text)
     end
     RB.DrawStatus()
     RB.Draw()
+end
+
+-- ---------------------------------------------------------------------------
+-- Reserves on raidres for someone else
+--
+-- raidres's own "This reservation is for another player": a list's owner or
+-- admins can reserve for someone who can't use the site, under their name,
+-- class and spec. It is filed under your raidres account, so they can't
+-- change it there; you and the list's admins can. Turned on per player from
+-- their row's right-click menu.
+-- ---------------------------------------------------------------------------
+
+RB.forOthers = RB.forOthers or {}       -- key(name) -> their clicks go to raidres
+
+-- A player's class token: the raid's roster, or whoever was added here.
+function RB.ClassOf(name)
+    local k = key(name)
+    local x = RB.extraPlayers and RB.extraPlayers[k]
+    if x then return x.class end
+    for _, r in ipairs(RB.Roster()) do
+        if key(r.name) == k then return r.class end
+    end
+    return nil
+end
+
+function RB.ReservesForOther(s, name)
+    return name and RB.forOthers[key(name)] and s and RB.MySignup(s, name) == nil
+        and s.ref and s.ref ~= "manual"
+        and RB.LockControlReady and RB.LockControlReady() and true or false
+end
+
+function RB.ReserveForOther(id, remove, spec)
+    local s = RB.gui and RB.gui.snap
+    local who = RB.player
+    if not s or not who then return end
+    if RB.HelperBusy() then
+        RB.Notice("still waiting on raidres for the last one.")
+        return
+    end
+    if RB.sessionExpired then
+        RB.Notice("your raidres session expired: click Sign in at the top first.")
+        return
+    end
+    if s.locked then
+        RB.Notice("the list is locked on raidres. Unlock it to change reserves.")
+        return
+    end
+    local token = RB.ClassOf(who)
+    if not remove then
+        if not token then
+            RB.Notice("their class isn't known here: add them from a player's right-click menu.")
+            return
+        end
+        local held = 0
+        for _ in pairs(s.web[key(who)] or {}) do held = held + 1 end
+        if held >= RB.Limit() then
+            RB.Notice(who .. " has " .. held .. " of " .. RB.Limit() .. " on raidres. Take one back first.")
+            return
+        end
+        if s.hard[id] then
+            RB.Notice("that item is hard-reserved, so nobody can soft-reserve it.")
+            return
+        end
+        spec = spec or (RaidResBridge_Spec and RaidResBridge_Spec[key(who)])
+        if not spec then
+            RB.askSpec = { item = id, name = who, other = true, class = token }
+            ToggleDropDownMenu(1, nil, RB.gui.specMenu, "cursor")
+            RB.Notice("pick " .. who .. "'s spec: raidres needs it.")
+            return
+        end
+    end
+    if not RB.SendReserveCommand(s.ref, id, who, token and raidresClass(token), spec, remove, true) then
+        RB.Notice("can't reach the lock script. Is Nampower loaded?")
+        return
+    end
+    RB.Notice((remove and "taking back " or "reserving ") .. RB.ItemInfo(id) ..
+        " on raidres for " .. who .. "...")
+    RB.Draw()
+end
+
+-- A player row's right-click: their reserves on raidres, or someone new.
+function RB.OpenPlayerMenu(p)
+    local s = RB.gui and RB.gui.snap
+    if not s or not s.ref or s.ref == "manual" or not (RB.LockControlReady and RB.LockControlReady()) then
+        return
+    end
+    RB.playerMenuFor = p
+    ToggleDropDownMenu(1, nil, RB.gui.playerMenu, "cursor")
+end
+
+local function onPickPlayerMenu()
+    if CloseDropDownMenus then CloseDropDownMenus() end
+    local p = RB.playerMenuFor
+    if this.value == "add" then
+        RB.AskAddPlayer()
+    elseif this.value == "toggle" and p then
+        local k = key(p.name)
+        RB.forOthers[k] = not RB.forOthers[k] or nil
+        if RB.forOthers[k] then RB.player = p.name end
+        RB.Draw()
+    end
+end
+
+function RB.InitPlayerMenu()
+    local p = RB.playerMenuFor
+    local s = RB.gui and RB.gui.snap
+    if not s then return end
+    local info
+    if p and RB.MySignup(s, p.name) == nil then
+        info = {}
+        info.text = p.name
+        info.isTitle = 1
+        UIDropDownMenu_AddButton(info)
+        info = {}
+        info.value = "toggle"
+        info.func = onPickPlayerMenu
+        info.checked = RB.forOthers[key(p.name)] and 1 or nil
+        if not RB.ClassOf(p.name) then
+            info.text = "Reserve on raidres for them (class unknown)"
+            info.disabled = 1
+        else
+            info.text = "Reserve on raidres for them"
+        end
+        UIDropDownMenu_AddButton(info)
+    end
+    info = {}
+    info.text = "Add someone not listed..."
+    info.value = "add"
+    info.func = onPickPlayerMenu
+    UIDropDownMenu_AddButton(info)
+end
+
+-- Someone new: their name, then their class, then they're picked.
+function RB.AskAddPlayer()
+    if not StaticPopupDialogs.ZYLLARAIDRES_ADDPLAYER then
+        StaticPopupDialogs.ZYLLARAIDRES_ADDPLAYER = {
+            text = "Reserve on raidres for someone not listed. Their character name:",
+            button1 = "Next",
+            button2 = "Cancel",
+            hasEditBox = 1,
+            maxLetters = 12,
+            OnAccept = function()
+                local box = getglobal(this:GetParent():GetName() .. "EditBox")
+                RB.AddPlayerNamed(box and box:GetText())
+            end,
+            EditBoxOnEnterPressed = function()
+                RB.AddPlayerNamed(this:GetText())
+                this:GetParent():Hide()
+            end,
+            timeout = 0, whileDead = 1, hideOnEscape = 1,
+        }
+    end
+    StaticPopup_Show("ZYLLARAIDRES_ADDPLAYER")
+end
+
+local function onPickAddClass()
+    if CloseDropDownMenus then CloseDropDownMenus() end
+    local name = RB.addingName
+    if not name or not this.value then return end
+    RB.addingName = nil
+    RB.extraPlayers = RB.extraPlayers or {}
+    RB.extraPlayers[key(name)] = { name = name, class = this.value }
+    RB.forOthers[key(name)] = true
+    RB.player = name
+    RB.Refresh()
+end
+
+function RB.AddPlayerNamed(text)
+    local name = string.gsub(text or "", "%s", "")
+    -- a character name as the game allows it: letters, 2 to 12
+    if string.len(name) < 2 or string.len(name) > 12 or string.find(name, "[%p%d]") then
+        RB.Notice("that isn't a character name.")
+        return
+    end
+    RB.addingName = string.upper(string.sub(name, 1, 1)) .. string.sub(name, 2)
+    ToggleDropDownMenu(1, nil, RB.gui.classMenu, "cursor")
+end
+
+function RB.InitAddClassMenu()
+    if not RB.addingName then return end
+    local info = {}
+    info.text = RB.addingName .. "'s class"
+    info.isTitle = 1
+    UIDropDownMenu_AddButton(info)
+    local tokens = { "DRUID", "HUNTER", "MAGE", "PALADIN", "PRIEST", "ROGUE", "SHAMAN", "WARLOCK", "WARRIOR" }
+    for i = 1, table.getn(tokens) do
+        info = {}
+        info.text = raidresClass(tokens[i])
+        info.value = tokens[i]
+        info.func = onPickAddClass
+        UIDropDownMenu_AddButton(info)
+    end
 end
 
 --[[ Clicking an item gives it to whoever is selected, or takes it back.
@@ -796,6 +997,10 @@ function RB.ClickItem(data)
     local k = key(who)
     if RB.ReservesOnRaidres(s, who) then
         RB.ReserveOnRaidres(id, (s.web[k] and s.web[k][id]) and true or false)
+        return
+    end
+    if RB.ReservesForOther(s, who) then
+        RB.ReserveForOther(id, (s.web[k] and s.web[k][id]) and true or false)
         return
     end
     if s.web[k] and s.web[k][id] then
@@ -979,6 +1184,11 @@ function RB.PlayerTooltip(row)
         GameTooltip:AddLine(name .. (typed and "  (typed here)" or ""), r, g, b)
     end
     addGrey(RB.player and key(RB.player) == k and "Click to let go" or "Click to select")
+    if s.ref and s.ref ~= "manual" and RB.LockControlReady and RB.LockControlReady()
+            and RB.MySignup(s, p.name) == nil then
+        addGrey(RB.forOthers[k] and "Their loot clicks go to raidres. Right-click to stop."
+            or "Right-click: reserve on raidres for them")
+    end
     GameTooltip:Show()
 end
 
@@ -1156,8 +1366,13 @@ local function buildPlayers(f)
         row.count:SetPoint("RIGHT", row, "RIGHT", -4, 0)
         row.count:SetWidth(40)
         row.count:SetHeight(ROW_H)
+        row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
         row:SetScript("OnClick", function()
-            if this.data then RB.SelectPlayer(this.data.name) end
+            if arg1 == "RightButton" then
+                if this.data then RB.OpenPlayerMenu(this.data) end
+            elseif this.data then
+                RB.SelectPlayer(this.data.name)
+            end
         end)
         row:SetScript("OnEnter", function() RB.PlayerTooltip(this) end)
         row:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -1201,6 +1416,13 @@ local function buildPlayers(f)
     f.specMenu = CreateFrame("Frame", "ZyllaRaidResSpecMenu", f, "UIDropDownMenuTemplate")
     f.specMenu:Hide()
     UIDropDownMenu_Initialize(f.specMenu, RB.InitSpecMenu, "MENU")
+    -- a player's right-click, and the class of someone new
+    f.playerMenu = CreateFrame("Frame", "ZyllaRaidResPlayerMenu", f, "UIDropDownMenuTemplate")
+    f.playerMenu:Hide()
+    UIDropDownMenu_Initialize(f.playerMenu, RB.InitPlayerMenu, "MENU")
+    f.classMenu = CreateFrame("Frame", "ZyllaRaidResClassMenu", f, "UIDropDownMenuTemplate")
+    f.classMenu:Hide()
+    UIDropDownMenu_Initialize(f.classMenu, RB.InitAddClassMenu, "MENU")
     -- one reserve's SR+, for the list's owner and officers
     f.srMenu = CreateFrame("Frame", "ZyllaRaidResSrPlusMenu", f, "UIDropDownMenuTemplate")
     f.srMenu:Hide()
@@ -1225,7 +1447,9 @@ local function buildPlayers(f)
         row.remove:SetScript("OnClick", function()
             local r = this:GetParent()
             if not r.itemId or not RB.player then return end
-            if r.onRaidres then
+            if r.onRaidres and RB.ReservesForOther(RB.gui.snap, RB.player) then
+                RB.ReserveForOther(r.itemId, true)
+            elseif r.onRaidres then
                 RB.ReserveOnRaidres(r.itemId, true)
             elseif RB.RemoveManual(RB.player, r.itemId) then
                 RB.Commit()
@@ -2347,6 +2571,11 @@ function RB.DrawHint()
         line = "Pick a player, then click loot to reserve it for them."
     elseif s and s.inRaid and s.absent[key(RB.player)] and next(s.free) ~= nil then
         line = RB.player .. " isn't in your raid. If they're here under another name, press Match."
+    elseif RB.ReservesForOther(s, RB.player) then
+        local held = 0
+        for _ in pairs(s.web[key(RB.player)] or {}) do held = held + 1 end
+        line = "On raidres for " .. RB.player .. " (" .. math.max(RB.Limit() - held, 0) ..
+            " left), filed under your account: only you and the list's admins can change it."
     elseif RB.ReservesOnRaidres(s, RB.player) then
         local held = 0
         for _ in pairs(s.web[key(RB.player)] or {}) do held = held + 1 end
@@ -2459,7 +2688,7 @@ local function drawDetail(f, s, sel)
 
     local web = s.web[k] or {}
     -- yours, with the lock helper: raidres's rows can be taken back from here
-    local onRaidres = RB.ReservesOnRaidres(s, RB.player)
+    local onRaidres = RB.ReservesOnRaidres(s, RB.player) or RB.ReservesForOther(s, RB.player)
     local shown = n
     if n > D_ROWS then shown = D_ROWS - 1 end
     for i = 1, shown do
