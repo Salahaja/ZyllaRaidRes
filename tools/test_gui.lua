@@ -2438,42 +2438,42 @@ pick(addEntry)
 check("asks their name", POPUP and POPUP.which, "ZYLLARAIDRES_ADDPLAYER")
 RB.AddPlayerNamed("wired bro1")
 check("not a name with digits", string.find(hint(f), "isn't a character name", 1, true) ~= nil, true)
-RB.AddPlayerNamed("wiredbro")
+RB.AddPlayerNamed("wirelock")
 check("then their class", f.classMenu.ddOpen, true)
 pick(entry(MENU, "WARRIOR"))
-check("added, ticked and picked", RB.player .. " " .. tostring(RB.ForOther("DEMO42", "wiredbro")), "Wiredbro true")
-check("kept with the list, for after a /reload", RaidResBridge_ForOthers.demo42.wiredbro.on, true)
-check("as added here, with their class", RaidResBridge_ForOthers.demo42.wiredbro.class, "WARRIOR")
+check("added, ticked and picked", RB.player .. " " .. tostring(RB.ForOther("DEMO42", "wirelock")), "Wirelock true")
+check("kept with the list, for after a /reload", RaidResBridge_ForOthers.demo42.wirelock.on, true)
+check("as added here, with their class", RaidResBridge_ForOthers.demo42.wirelock.class, "WARRIOR")
 check("then their spec, from raidres's list for that class", MENU[1] and plain(MENU[1].text),
-    "Wiredbro's warrior spec on raidres")
+    "Wirelock's warrior spec on raidres")
 pick(entry(MENU, "WarriorFury"))
-check("kept for next time", RaidResBridge_Spec.wiredbro, "WarriorFury")
-check("and on the list", findRow(f.pRows, "Wiredbro") ~= nil or (function()
-    for _, p in ipairs(f.snap.players) do if p.name == "Wiredbro" then return true end end
+check("kept for next time", RaidResBridge_Spec.wirelock, "WarriorFury")
+check("and on the list", findRow(f.pRows, "Wirelock") ~= nil or (function()
+    for _, p in ipairs(f.snap.players) do if p.name == "Wirelock" then return true end end
     return false end)(), true)
 FILES[CMD4] = nil
 click(firstItemRow(f))
 check("their picks go to raidres with their class and spec",
-    string.find(FILES[CMD4] or "", " Wiredbro Warrior WarriorFury", 1, true) ~= nil, true)
+    string.find(FILES[CMD4] or "", " Wirelock Warrior WarriorFury", 1, true) ~= nil, true)
 FILES[RESULT4] = "ok reserved WarriorFury"
 run(1)
 
 do
-    local kept = RaidResBridge_ForOthers.demo42.wiredbro
-    RaidResBridge_ForOthers.demo42.wiredbro = nil
-    check("not added here, their class comes back from the spec kept", RB.ClassOf("Wiredbro"), "WARRIOR")
-    RaidResBridge_ForOthers.demo42.wiredbro = kept
+    local kept = RaidResBridge_ForOthers.demo42.wirelock
+    RaidResBridge_ForOthers.demo42.wirelock = nil
+    check("not added here, their class comes back from the spec kept", RB.ClassOf("Wirelock"), "WARRIOR")
+    RaidResBridge_ForOthers.demo42.wirelock = kept
     local others = RB.Players({ ref = "OTHER1", merged = { softreserves = {} } })
     local shownElsewhere = false
-    for _, p in ipairs(others) do if p.name == "Wiredbro" then shownElsewhere = true end end
+    for _, p in ipairs(others) do if p.name == "Wirelock" then shownElsewhere = true end end
     check("added to one list, they're not on another's", shownElsewhere, false)
-    check("nor ticked there", RB.ForOther("OTHER1", "Wiredbro"), false)
+    check("nor ticked there", RB.ForOther("OTHER1", "Wirelock"), false)
     -- a /reload: what's kept brings them back as they were
     local saved = RaidResBridge_ForOthers
     RB.fetched.unsaved = true
     RaidResBridge_ForOthers = saved
     RB.Refresh()
-    check("after a /reload they're still reserved for on raidres", RB.ReservesForOther(f.snap, "Wiredbro"), true)
+    check("after a /reload they're still reserved for on raidres", RB.ReservesForOther(f.snap, "Wirelock"), true)
     RB.RememberList("DEMO42", { metadata = {} })
     check("kept while the list is on the Recent menu", RaidResBridge_ForOthers.demo42 ~= nil, true)
     RaidResBridge_ForOthers.gone11 = { x = { name = "X", on = true } }
@@ -2515,7 +2515,7 @@ do
     run(1)
     check("raidres's no in its words", string.find(hint(f), "raidres: Brisa isn't an admin of it", 1, true) ~= nil,
         true)
-    RB.OpenPlayerMenu({ name = "Wiredbro" })
+    RB.OpenPlayerMenu({ name = "Wirelock" })
     check("not someone only added here: raidres doesn't know their account", menuEntry("admin"), nil)
     RB.OpenPlayerMenu({ name = "Nobodyhere" })
     check("nor someone not on the raidres list", menuEntry("admin"), nil)

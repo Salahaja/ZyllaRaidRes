@@ -284,19 +284,19 @@ try:
 
     print("for another player")
     owner = copy.deepcopy(OPEN) | {"isAuthor": True}
-    answer, sent = run(args(FREE, "Wiredbro", cls="Warrior", spec="WarriorFury") | {"forOther": True},
+    answer, sent = run(args(FREE, "Wirelock", cls="Warrior", spec="WarriorFury") | {"forOther": True},
                        event=owner)
     check("an owner reserves for another player", answer["result"], "ok")
     check("as raidres's own 'for another player' switch",
           (sent[0]["body"]["characterName"], sent[0]["body"]["isTemporary"], sent[0]["body"]["specialization"]),
-          ("Wiredbro", True, "WarriorFury"))
-    answer, sent = run(args(FREE, "Wiredbro", cls="Warrior") | {"forOther": True}, event=owner)
+          ("Wirelock", True, "WarriorFury"))
+    answer, sent = run(args(FREE, "Wirelock", cls="Warrior") | {"forOther": True}, event=owner)
     check("their spec is asked for, not looked up as yours", answer, {"result": "needspec"})
-    answer, sent = run(args(FREE, "Wiredbro", cls="Warrior", spec="WarriorFury") | {"forOther": True},
+    answer, sent = run(args(FREE, "Wirelock", cls="Warrior", spec="WarriorFury") | {"forOther": True},
                        event=copy.deepcopy(OPEN) | {"isAuthor": False})
     check("not for someone who doesn't run the list", (answer.get("message"), sent),
           ("only the list's owner or its admins can reserve for others", []))
-    answer, sent = run(args(FREE, "Wiredbro", cls="Warrior", spec="WarriorFury") | {"forOther": True},
+    answer, sent = run(args(FREE, "Wirelock", cls="Warrior", spec="WarriorFury") | {"forOther": True},
                        event=copy.deepcopy(OPEN) | {"isAuthor": False, "extraAdministratorUserIds": ["1000"]})
     check("an admin of it may", answer["result"], "ok")
     answer, sent = run(args(FREE, "Brisa", cls="Priest", spec="PriestHoly") | {"forOther": True}, event=owner)
@@ -304,9 +304,9 @@ try:
           ("Brisa signed up on raidres themselves; they change it there", []))
     made = copy.deepcopy(owner)
     made["reservations"].append({"id": 777, "raidItemId": RAIDRES_ID[FREE], "comment": None, "srPlus": None,
-        "character": {"name": "Wiredbro", "class": "Warrior", "specialization": "WarriorFury", "isTemporary": True},
+        "character": {"name": "Wirelock", "class": "Warrior", "specialization": "WarriorFury", "isTemporary": True},
         "user": {"id": "1000"}})
-    answer, sent = run(args(FREE, "Wiredbro", remove=True) | {"forOther": True}, event=made)
+    answer, sent = run(args(FREE, "Wirelock", remove=True) | {"forOther": True}, event=made)
     check("and one you made for them comes back off", [(x["method"], x["url"]) for x in sent],
           [("DELETE", "/api/raid-event-reservations/777")])
 
@@ -528,9 +528,9 @@ try:
     answer, sent = admin("Nobody")
     check("someone not on the list, with no account sent, is refused", answer.get("message"),
           "Nobody isn't signed up on this list, and their raidres account isn't known here")
-    answer, sent = admin("Wiredbro", event=made | {"authorId": "1000", "extraAdministratorUserIds": []})
+    answer, sent = admin("Wirelock", event=made | {"authorId": "1000", "extraAdministratorUserIds": []})
     check("someone only reserved for by another isn't known by raidres's account", (answer.get("message"), sent),
-          ("Wiredbro was reserved for by someone else; they sign up on raidres themselves first", []))
+          ("Wirelock was reserved for by someone else; they sign up on raidres themselves first", []))
     full = copy.deepcopy(owned) | {"extraAdministratorUserIds": [str(2000 + i) for i in range(10)]}
     answer, sent = admin("Brisa", event=full)
     check("not an eleventh", (answer.get("message"), sent),
@@ -554,7 +554,7 @@ try:
                        script=w._ADMIN_JS, event=owned, reply={"status": 200, "body": {}})
     check("the list's own account wins over a saved one",
           sent[0]["body"]["extraAdministratorUserIdentifiers"], ["1003", "1001"])
-    answer, sent = run({"ref": "DEMO42", "name": "Wiredbro", "add": True, "id": far, "dry": False},
+    answer, sent = run({"ref": "DEMO42", "name": "Wirelock", "add": True, "id": far, "dry": False},
                        script=w._ADMIN_JS, event=made | {"authorId": "1000", "extraAdministratorUserIds": []},
                        reply={"status": 200, "body": {}})
     check("and one only reserved for by another is found by theirs",

@@ -378,13 +378,13 @@ do
     local big = "221800000000000001"     -- made up, as long as raidres's are
     RB.NoteUsers({ reservations = {
         { character = { name = "Brisa" }, user = { id = big } },
-        { character = { name = "Wiredbro", isTemporary = true }, user = { id = "777" } },
+        { character = { name = "Wirelock", isTemporary = true }, user = { id = "777" } },
         { character = { name = "Tester" }, user = { id = "555" } },
         { character = { name = "Testeralt" }, user = { id = "555" } },
         { character = { name = "Numbered" }, user = { id = 12345 } },
     } })
     check("a long id is kept to the last digit", RB.UserId("brisa"), big)
-    check("not one made for another player: it's whoever made it", RB.UserId("Wiredbro"), nil)
+    check("not one made for another player: it's whoever made it", RB.UserId("Wirelock"), nil)
     check("not yours", RB.UserId("Tester"), nil)
     check("nor your alts on the same account", RB.UserId("Testeralt"), nil)
     check("nor an id that isn't text", RB.UserId("Numbered"), nil)
