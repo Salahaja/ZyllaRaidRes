@@ -579,10 +579,17 @@ can. Someone who signed up on raidres themselves is left to change their own.
 
 **Making someone an admin of the list**: right-click a player on a raidres
 list and pick **Make admin of this list** or **Remove as admin**. raidres knows
-them by the account they signed up with, so it works only for someone who
-reserved on the site themselves, and only the list's owner can do it; raidres
-takes up to 10 admins. The other admins are kept as they are. From a terminal:
+them by the account they signed up with: someone who reserved on the site
+themselves, on this list or on one fetched here before. Only the list's owner
+can do it, and raidres takes up to 10 admins. The other admins are kept as they
+are. From a terminal:
 `python tools/raidres_lock.py admin REF NAME add --dry-run`.
+
+Players' raidres accounts (their raidres user-IDs, never yours) are saved in
+your SavedVariables, `RaidResBridge_Users`, from each list fetched with
+RaidResHttp.dll. A reserve someone made for another player says nothing about
+that player's account, so it isn't saved. The New event dialog's **Admins**
+menu ticks up to 10 of the saved players, and remembers them for next time.
 
 From a terminal, `tools/raidres_lock.py create` does the same, and `--dry-run`
 shows what it would send:

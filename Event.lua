@@ -10,9 +10,9 @@
      the form would. Then its link goes into the window's box, the list is
      fetched, and the raid can be told in chat.
 
-     What the form keeps for later -- hard reserves, extra admins, banned
-     users -- is left to raidres's site, where each is a list to manage
-     rather than one field.
+     Admins come from the players whose raidres accounts were saved from
+     lists fetched here (RaidResBridge_Users); banned users are left to
+     raidres's site.
 
      The choices are remembered (RaidResBridge_NewEvent), because next
      week's event is usually this week's. Every menu entry's func reads
@@ -21,7 +21,7 @@
 local RB = RaidResBridge
 local UI            -- RB.UI, once Gui.lua has made it
 
-local W, H = 360, 420
+local W, H = 360, 452
 local EDGE = 20
 local COL = EDGE + 88       -- where the controls start, after their labels
 
@@ -417,6 +417,80 @@ function RB.InitEventPrevMenu()
 end
 
 -- ---------------------------------------------------------------------------
+-- Admins: players whose raidres accounts were saved, ticked
+-- ---------------------------------------------------------------------------
+
+local ADMINS = 10           -- raidres takes no more
+
+-- The saved players, by name.
+local function savedPlayers()
+    local out = {}
+    for k, p in pairs((RB.Users and RB.Users().players) or {}) do
+        table.insert(out, { key = k, name = p.name or k })
+    end
+    table.sort(out, byName)
+    return out
+end
+
+local function adminHas(e, k)
+    for _, x in ipairs(e.admins) do if x == k then return true end end
+    return false
+end
+
+-- A player ticked or unticked; the menu stays open for the next one.
+local function onToggleAdmin()
+    local e = form()
+    local k = this.value
+    if adminHas(e, k) then
+        for i = table.getn(e.admins), 1, -1 do
+            if e.admins[i] == k then table.remove(e.admins, i) end
+        end
+    elseif table.getn(e.admins) < ADMINS then
+        table.insert(e.admins, k)
+    end
+    RB.DrawNewEvent()
+end
+
+local function onPickAdminsNone()
+    form().admins = {}
+    picked()
+end
+
+function RB.InitEventAdminsMenu()
+    local e = form()
+    if not e then return end
+    local list = savedPlayers()
+    add("None", "none", onPickAdminsNone, table.getn(e.admins) == 0)
+    if table.getn(list) == 0 then
+        add(UI.hex(UI.GREY, "No players saved yet: they're saved from"), "-", nil)
+        add(UI.hex(UI.GREY, "the lists you fetch with RaidResHttp.dll"), "-", nil)
+        return
+    end
+    add("Players seen on your lists")
+    local full = table.getn(e.admins) >= ADMINS
+    for _, p in ipairs(list) do
+        local info = {}
+        info.text = p.name
+        info.value = p.key
+        info.func = onToggleAdmin
+        info.checked = adminHas(e, p.key) and 1 or nil
+        info.keepShownOnClick = 1
+        if full and not info.checked then info.disabled = 1 end
+        UIDropDownMenu_AddButton(info)
+    end
+end
+
+-- The ticked players' raidres user-IDs, for the create command.
+local function adminIds(e)
+    local out = {}
+    for _, k in ipairs(e.admins) do
+        local id = RB.UserId(k)
+        if id then table.insert(out, id) end
+    end
+    return out
+end
+
+-- ---------------------------------------------------------------------------
 -- Building it
 -- ---------------------------------------------------------------------------
 
@@ -526,14 +600,17 @@ local function build()
     f.fromLabel:SetText("from")
     f.prev = dropdown(f, "ZyllaRaidResEventPrev", 100, RB.InitEventPrevMenu, COL + 104, -288)
 
-    f.descLabel = label(f, "Description", -322)
+    f.adminsLabel = label(f, "Admins", -322)
+    f.admins = dropdown(f, "ZyllaRaidResEventAdmins", 200, RB.InitEventAdminsMenu, COL, -322)
+
+    f.descLabel = label(f, "Description", -354)
     f.desc = UI.editBox(f, "ZyllaRaidResEventDesc", W - COL - EDGE - 4, "Optional")
-    f.desc:SetPoint("TOPLEFT", f, "TOPLEFT", COL + 4, -318)
+    f.desc:SetPoint("TOPLEFT", f, "TOPLEFT", COL + 4, -350)
     f.desc:SetMaxLetters(200)
     f.desc:SetScript("OnEnterPressed", function() this:ClearFocus() end)
 
     f.status = UI.text(f, "GameFontHighlightSmall")
-    f.status:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, -350)
+    f.status:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, -382)
     f.status:SetWidth(W - EDGE * 2 - 8)
     f.status:SetHeight(24)
 
@@ -688,6 +765,10 @@ function RB.DrawNewEvent()
         hr = table.getn(e.hr) .. (table.getn(e.hr) == 1 and " item" or " items")
     end
     UIDropDownMenu_SetText(hr, f.hr)
+    local admins = e.admins or {}
+    local one = admins[1] and RB.Users().players[admins[1]]
+    local n = table.getn(admins)
+    UIDropDownMenu_SetText((n == 0 and "None") or (n == 1 and one and one.name) or (n .. " players"), f.admins)
     -- an event's settings not read from raidres show as not known
     local known = not f.mode or e.known
     local set = e.set or {}
@@ -705,11 +786,12 @@ end
      save instead of create. Rows are moved while the dialog stands still. ]]
 local function layout(f, settings)
     local newOnly = { f.raidLabel, f.raid, f.startsLabel, f.day, f.hour, f.minute, f.clock,
-                      f.limitLabel, f.limit, f.lock, f.comments, f.dupes, f.descLabel, f.desc }
+                      f.limitLabel, f.limit, f.lock, f.comments, f.dupes, f.adminsLabel, f.admins,
+                      f.descLabel, f.desc }
     for i = 1, table.getn(newOnly) do
         if settings then newOnly[i]:Hide() else newOnly[i]:Show() end
     end
-    local hrY, srY, rowY, statusY = -152, -232, -288, -350
+    local hrY, srY, rowY, statusY = -152, -232, -288, -382
     if settings then hrY, srY, rowY, statusY = -46, -82, -112, -146 end
     f.hrLabel:ClearAllPoints()
     f.hrLabel:SetPoint("TOPLEFT", f, "TOPLEFT", EDGE + 4, hrY)
@@ -760,7 +842,13 @@ function RB.OpenNewEvent()
         hr = {},                -- hard reserves are picked fresh each event
         inc = last.inc or 10,
         prev = nil,
+        admins = {},            -- last time's, of those still saved
     }
+    for _, k in ipairs(last.admins or {}) do
+        if RB.UserId(k) and table.getn(RB.eventForm.admins) < ADMINS then
+            table.insert(RB.eventForm.admins, k)
+        end
+    end
     f.desc:SetText(last.description or "")
     f.mode = nil
     f.title:SetText("New raidres event")
@@ -881,7 +969,7 @@ function RB.CreateEvent()
         raid = e.raid, day = e.day, clock = clock, limit = e.limit, lock = e.lock,
         comments = e.comments, srplus = e.srplus, dupes = e.dupes, description = desc,
         name = raidName(e.raid), tpl = e.tpl, hr = e.hr, inc = e.inc, prev = e.prev,
-        skip = e.skip, input = e.input, valid = e.valid,
+        skip = e.skip, input = e.input, valid = e.valid, admins = adminIds(e),
     })
     if not sent then
         note("Can't reach the lock script. Is Nampower loaded?", UI.RED)
@@ -891,6 +979,8 @@ function RB.CreateEvent()
     last.raid, last.day, last.hour, last.minute = e.raid, e.day, e.hour, e.minute
     last.limit, last.lock, last.comments = e.limit, e.lock, e.comments
     last.srplus, last.dupes, last.description, last.inc = e.srplus, e.dupes, desc, e.inc
+    last.admins = {}
+    for _, k in ipairs(e.admins) do table.insert(last.admins, k) end
     note("Creating it on raidres...", UI.GOLD)
     RB.DrawNewEvent()
 end

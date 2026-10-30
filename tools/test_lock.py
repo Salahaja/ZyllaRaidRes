@@ -99,6 +99,22 @@ check("a bad setting is refused before Chrome", w.event_settings(["DEMO42", "srp
 check("so is an unknown one", w.event_settings(["DEMO42", "admins=all"]), "error: bad setting: 'admins=all'")
 check("an admin change must say which way", w.set_admin(["DEMO42", "Brisa", "maybe"]), "error: bad command")
 check("and a name, not a path", w.set_admin(["DEMO42", "../x", "add"]), "error: bad character name: '../x'")
+check("a saved account must be digits", w.set_admin(["DEMO42", "Brisa", "add", "id=12ab"]),
+      "error: bad raidres user-ID: 'id=12ab'")
+body = w.event_body("95", "2026-11-02", "20:00", "2", "0", "1", "0", "0", "", now=NOW,
+                    options={"admins": "221800000000000001,221800000000000002,221800000000000001"})
+check("a new event's admins go as raidres user-IDs, as text, once each",
+      body["extraAdministratorUserIdentifiers"], ["221800000000000001", "221800000000000002"])
+for label, admins in [("an admin id that isn't digits", "12,ab"),
+                      ("an eleventh admin", ",".join(str(100 + i) for i in range(11)))]:
+    try:
+        w.event_body("95", "2026-11-02", "20:00", "2", "0", "1", "0", "0", "", now=NOW,
+                     options={"admins": admins})
+        check(label + " is refused", "passed", "refused")
+    except ValueError:
+        check(label + " is refused", "refused", "refused")
+check("admins come before the description", w.split_options(["admins=1,2", "MC"]),
+      ({"admins": "1,2"}, "MC"))
 check("an SR+ change must say what", w.set_srplus(["DEMO42", "1", "Aldwyn", "value=x"]),
       "error: bad SR+ change: 'value=x'")
 opts, desc = w.split_options(["hr=19137,17076", "inc=10", "prev=WW8CK7", "MC", "inc=5", "night"])
@@ -510,7 +526,8 @@ try:
     answer, sent = admin("Aldwyn")
     check("nor the owner made one", (answer.get("message"), sent), ("Aldwyn owns the list", []))
     answer, sent = admin("Nobody")
-    check("someone not on the list is refused", answer.get("message"), "Nobody isn't signed up on this list")
+    check("someone not on the list, with no account sent, is refused", answer.get("message"),
+          "Nobody isn't signed up on this list, and their raidres account isn't known here")
     answer, sent = admin("Wiredbro", event=made | {"authorId": "1000", "extraAdministratorUserIds": []})
     check("someone only reserved for by another isn't known by raidres's account", (answer.get("message"), sent),
           ("Wiredbro was reserved for by someone else; they sign up on raidres themselves first", []))
@@ -528,6 +545,24 @@ try:
     answer, sent = admin("Brisa", event=twice)
     check("two accounts under one name aren't guessed between", (answer.get("message"), sent),
           ("two raidres accounts signed up as Brisa", []))
+    far = "221800000000000009"
+    answer, sent = run({"ref": "DEMO42", "name": "Faraway", "add": True, "id": far, "dry": False},
+                       script=w._ADMIN_JS, event=owned, reply={"status": 200, "body": {}})
+    check("someone not on the list, by the account saved for them",
+          sent[0]["body"]["extraAdministratorUserIdentifiers"], ["1003", far])
+    answer, sent = run({"ref": "DEMO42", "name": "Brisa", "add": True, "id": far, "dry": False},
+                       script=w._ADMIN_JS, event=owned, reply={"status": 200, "body": {}})
+    check("the list's own account wins over a saved one",
+          sent[0]["body"]["extraAdministratorUserIdentifiers"], ["1003", "1001"])
+    answer, sent = run({"ref": "DEMO42", "name": "Wiredbro", "add": True, "id": far, "dry": False},
+                       script=w._ADMIN_JS, event=made | {"authorId": "1000", "extraAdministratorUserIds": []},
+                       reply={"status": 200, "body": {}})
+    check("and one only reserved for by another is found by theirs",
+          sent[0]["body"]["extraAdministratorUserIdentifiers"], [far])
+    answer, sent = run({"ref": "DEMO42", "name": "Faraway", "add": True, "id": "1000", "dry": False},
+                       script=w._ADMIN_JS, event=owned)
+    check("a saved account that's the owner's is refused", (answer.get("message"), sent),
+          ("Faraway owns the list", []))
 finally:
     ws.close()
     w.kill_chrome()

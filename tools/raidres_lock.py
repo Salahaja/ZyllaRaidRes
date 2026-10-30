@@ -28,7 +28,7 @@ Usage
                                 [DESCRIPTION...] [--dry-run]
                                         a new event; switches are 0/1, the
                                         time this PC's; prints its reference
-  python raidres_lock.py admin REF NAME add|remove [--dry-run]
+  python raidres_lock.py admin REF NAME add|remove [id=N] [--dry-run]
                                         make NAME an admin of your list REF,
                                         or no longer one
 """
@@ -712,7 +712,9 @@ async (a) => {
 
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _CLOCK_RE = re.compile(r"^\d{2}:\d{2}$")
-_OPTION_RE = re.compile(r"^(hr|tpl|inc|skip|input|valid|prev)=(\S*)$")
+ADMIN_LIMIT = 10        # raidres's own form takes no more admins
+
+_OPTION_RE = re.compile(r"^(hr|tpl|inc|skip|input|valid|prev|admins)=(\S*)$")
 
 def event_body(raid_id, day, clock, limit, lock, comments, srplus, dupes, description,
                now=None, options=None):
@@ -721,7 +723,8 @@ def event_body(raid_id, day, clock, limit, lock, comments, srplus, dupes, descri
     The date and time are the player's own clock, as the game shows it and
     as raidres's form takes them in a browser on this same machine; raidres
     stores UTC, so they go as UTC, the way the form's toISOString() sends
-    them. options are the SR+ settings (inc, skip, input, valid, prev)."""
+    them. options are the SR+ settings (inc, skip, input, valid, prev) and
+    the admins (raidres user-IDs, comma-separated, kept as text)."""
     from datetime import datetime, timezone
     try:
         raid_id, limit = int(raid_id), int(limit)
@@ -756,6 +759,12 @@ def event_body(raid_id, day, clock, limit, lock, comments, srplus, dupes, descri
     prev = o.get("prev") or None
     if prev is not None:
         validate_ref(prev)
+    admins = [x for x in (o.get("admins") or "").split(",") if x]
+    if any(not x.isdigit() or len(x) > 25 for x in admins):
+        raise ValueError("bad raidres user-ID among the admins")
+    admins = list(dict.fromkeys(admins))
+    if len(admins) > ADMIN_LIMIT:
+        raise ValueError("raidres takes at most %d admins" % ADMIN_LIMIT)
     return {
         "raidId": raid_id,
         "description": description,
@@ -766,7 +775,7 @@ def event_body(raid_id, day, clock, limit, lock, comments, srplus, dupes, descri
         "lockMinutesBeforeStartTime": 0,
         "locked": None,
         "advancedHrItems": [],
-        "extraAdministratorUserIdentifiers": [],
+        "extraAdministratorUserIdentifiers": admins,
         "allowComments": comments == "1",
         "minimumAccountAge": 0,
         "forbiddenUserIds": [],
@@ -818,7 +827,7 @@ def _page_eval(script, args, url="https://raidres.top/"):
 def create_event(words, dry=False):
     """create RAIDID YYYY-MM-DD HH:MM LIMIT LOCK COMMENTS SRPLUS DUPES
               [hr=ID,ID|tpl=ID] [inc=N] [skip=N] [input=0|1] [valid=0|1] [prev=REF]
-              [DESCRIPTION...]"""
+              [admins=USERID,USERID] [DESCRIPTION...]"""
     if len(words) < 8:
         return "error: bad command"
     options, description = split_options(words[8:])
@@ -1058,10 +1067,10 @@ def set_srplus(words, dry=False):
 # the whole list of admins, as raidres's own edit form sends it, with the one
 # added or taken out. A player is known by the raidres user-ID on the rows
 # they reserved themselves; a row made "for another player" carries the id
-# of whoever made it, so it can't say who they are.
+# of whoever made it, so it can't say who they are. For someone not on the
+# list, the game sends the id it saved from an earlier one (id=N); the list's
+# own rows win over it.
 # ---------------------------------------------------------------------------
-
-ADMIN_LIMIT = 10        # raidres's own form takes no more
 
 _ADMIN_JS = r"""
 async (a) => {
@@ -1076,14 +1085,14 @@ async (a) => {
   const rows = (e.reservations || []).filter(r => r.character && r.user
     && String(r.character.name).toLocaleLowerCase() === name);
   const own = rows.filter(r => !r.character.isTemporary);
-  if (own.length === 0)
+  if (own.length === 0 && !a.id)
     return answer({ result: 'error', message: rows.length > 0
       ? a.name + ' was reserved for by someone else; they sign up on raidres themselves first'
-      : a.name + " isn't signed up on this list" });
+      : a.name + " isn't signed up on this list, and their raidres account isn't known here" });
   const ids = [...new Set(own.map(r => String(r.user.id)))];
   if (ids.length > 1)
     return answer({ result: 'error', message: 'two raidres accounts signed up as ' + a.name });
-  const id = ids[0];
+  const id = ids.length === 1 ? ids[0] : String(a.id);
   if (e.authorId != null && String(e.authorId) === id)
     return answer({ result: 'error', message: a.name + ' owns the list' });
   const now = (e.extraAdministratorUserIds || []).map(String);
@@ -1101,18 +1110,26 @@ async (a) => {
 }
 """
 
+_USER_ID_RE = re.compile(r"^id=(\d{1,25})$")
+
 def set_admin(words, dry=False):
-    """admin REF NAME add|remove"""
-    if len(words) != 3 or words[2] not in ("add", "remove"):
+    """admin REF NAME add|remove [id=RAIDRES-USER-ID]"""
+    if len(words) not in (3, 4) or words[2] not in ("add", "remove"):
         return "error: bad command"
     try:
         ref = validate_ref(words[0])
         name = words[1]
         if not _NAME_RE.match(name):
             raise ValueError("bad character name: %r" % name)
+        uid = None
+        if len(words) == 4:
+            m = _USER_ID_RE.match(words[3])
+            if not m:
+                raise ValueError("bad raidres user-ID: %r" % words[3])
+            uid = m.group(1)            # text: too long for a JS number
     except ValueError as e:
         return "error: %s" % e
-    args = {"ref": ref, "name": name, "add": words[2] == "add", "dry": bool(dry)}
+    args = {"ref": ref, "name": name, "add": words[2] == "add", "id": uid, "dry": bool(dry)}
     answer, line = _page_eval(_ADMIN_JS, args, "https://raidres.top/res/%s" % ref)
     if line:
         return line
@@ -1418,8 +1435,8 @@ def main():
     elif cmd == "admin":
         dry = "--dry-run" in args
         words = [w for w in args[1:] if w != "--dry-run"]
-        if len(words) != 3:
-            print("usage: raidres_lock.py admin REF NAME add|remove [--dry-run]")
+        if len(words) not in (3, 4):
+            print("usage: raidres_lock.py admin REF NAME add|remove [id=RAIDRES-USER-ID] [--dry-run]")
             sys.exit(1)
         result = set_admin(words, dry=dry)
         print(result)

@@ -316,6 +316,7 @@ print("/rrb with the DLL")
 do
     local RB = world(true)
     serve()
+    RaidResBridge_Users = nil
     SlashCmdList.RAIDRESBRIDGE("https://raidres.top/res/DEMO42")
     check("asks for the event first", REQUESTED[1], "/api/events/DEMO42")
     check("no request file for the watcher", FILES["RaidResBridge_request.txt"], nil)
@@ -343,6 +344,8 @@ do
     check("with its raid", RaidResBridge_Recent[1].place, Expected_Raids[100].name)
     check("the driver goes quiet", DRIVER.shown, false)
     check("and nothing is left in flight", RB.HttpBusy(), false)
+    check("players' raidres accounts are saved from it", RB.UserId("Brisa"), "1001")
+    check("as text, by name", RaidResBridge_Users.players.brisa.name, "Brisa")
 
     RaidResBridge_Raids = nil
     loadstring(FILES["RaidResBridge_raids.lua"])()
@@ -366,6 +369,32 @@ do
     SlashCmdList.RAIDRESBRIDGE("DEMO42")
     run(2)
     checkSame("no file API: RollFor still gets it", IMPORTED, Expected_Data)
+end
+
+print("players' raidres accounts")
+do
+    local RB = world(true)
+    RaidResBridge_Users = nil
+    local big = "221800000000000001"     -- made up, as long as raidres's are
+    RB.NoteUsers({ reservations = {
+        { character = { name = "Brisa" }, user = { id = big } },
+        { character = { name = "Wiredbro", isTemporary = true }, user = { id = "777" } },
+        { character = { name = "Tester" }, user = { id = "555" } },
+        { character = { name = "Testeralt" }, user = { id = "555" } },
+        { character = { name = "Numbered" }, user = { id = 12345 } },
+    } })
+    check("a long id is kept to the last digit", RB.UserId("brisa"), big)
+    check("not one made for another player: it's whoever made it", RB.UserId("Wiredbro"), nil)
+    check("not yours", RB.UserId("Tester"), nil)
+    check("nor your alts on the same account", RB.UserId("Testeralt"), nil)
+    check("nor an id that isn't text", RB.UserId("Numbered"), nil)
+    RaidResBridge_Users.players.oldalt = { name = "Oldalt", id = "555" }
+    RB.NoteUsers({ reservations = {} })
+    check("an alt saved before your account was seen goes", RB.UserId("Oldalt"), nil)
+    RB.NoteUsers({ reservations = { { character = { name = "Brisa" }, user = { id = "999" } } } })
+    check("a newer list's account wins", RB.UserId("Brisa"), "999")
+    RB.NoteUsers(nil)
+    check("a list that isn't one changes nothing", RB.UserId("Brisa"), "999")
 end
 
 -- ================================================================== failures

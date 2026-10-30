@@ -1860,6 +1860,53 @@ SlashCmdList.RAIDRESBRIDGE("new")
 run(1)
 check("and asked for once a session", table.getn(ASKED), 1)
 
+print("a new event: admins")
+do
+    RB = world()
+    RaidResLockReady = function() return 1 end
+    RaidResBridge_NewEvent = nil
+    RaidResBridge_Users = nil
+    SlashCmdList.RAIDRESBRIDGE("")
+    SlashCmdList.RAIDRESBRIDGE("new")
+    local ev4 = RB.eventFrame
+    FILES["RaidResBridge_lock_result.txt"] = "ok templates []"
+    run(1)
+    check("none saved yet: it says where they come from",
+        string.find(plain(openMenu(ev4.admins)[2].text), "No players saved yet", 1, true) ~= nil, true)
+    ev4:Hide()
+    local a, b = "221800000000000001", "221800000000000002"
+    RaidResBridge_Users = { players = { brisa = { name = "Brisa", id = a }, corvane = { name = "Corvane", id = b } },
+                            mine = {} }
+    SlashCmdList.RAIDRESBRIDGE("new")
+    check("it starts with none", ev4.admins.ddText, "None")
+    local menu = openMenu(ev4.admins)
+    local names = {}
+    for _, info in ipairs(menu) do
+        if info.func and info.value ~= "none" then table.insert(names, plain(info.text)) end
+    end
+    check("the saved players, by name", table.concat(names, ","), "Brisa,Corvane")
+    pick(entry(menu, "brisa"))
+    check("one ticked shows by name", ev4.admins.ddText, "Brisa")
+    pick(entry(openMenu(ev4.admins), "corvane"))
+    check("two show as a count", ev4.admins.ddText, "2 players")
+    pick(entry(openMenu(ev4.raid), 100))
+    pick(openMenu(ev4.day)[3])
+    FILES["RaidResBridge_lock_cmd.txt"] = nil
+    click(ev4.create)
+    check("their raidres accounts go with the event, every digit",
+        string.find(FILES["RaidResBridge_lock_cmd.txt"] or "", " admins=" .. a .. "," .. b, 1, true) ~= nil, true)
+    FILES["RaidResBridge_lock_result.txt"] = "error: nope"
+    run(1)
+    ev4:Hide()
+    RaidResBridge_Users.players.corvane = nil
+    SlashCmdList.RAIDRESBRIDGE("new")
+    check("next time, last time's, of those still saved", ev4.admins.ddText, "Brisa")
+    pick(entry(openMenu(ev4.admins), "none"))
+    check("and None clears them", ev4.admins.ddText, "None")
+    ev4:Hide()
+    RaidResBridge_Users = nil
+end
+
 print("a new event: when raidres doesn't answer")
 do
     RB = world()
@@ -2252,6 +2299,16 @@ do
     check("not someone only added here: raidres doesn't know their account", menuEntry("admin"), nil)
     RB.OpenPlayerMenu({ name = "Nobodyhere" })
     check("nor someone not on the raidres list", menuEntry("admin"), nil)
+    -- an account saved from an earlier list: made up, as long as raidres's
+    local far = "221800000000000009"
+    RaidResBridge_Users = { players = { nobodyhere = { name = "Nobodyhere", id = far } }, mine = {} }
+    RB.OpenPlayerMenu({ name = "Nobodyhere" })
+    check("one whose account was saved can be, off the list", menuEntry("admin") ~= nil, true)
+    pick(menuEntry("admin"))
+    check("the saved account goes with the name, every digit", FILES[CMD4], "admin DEMO42 Nobodyhere add id=" .. far)
+    FILES[RESULT4] = "ok admin 3"
+    run(1)
+    RaidResBridge_Users = nil
 end
 
 print("and not for yourself, or without the helper")
@@ -2380,7 +2437,7 @@ local buttonsBefore = CALLS.SkinButton
 SlashCmdList.RAIDRESBRIDGE("new")
 check("the New event dialog takes pfUI's look too", RB.eventFrame and RB.eventFrame.pfui, true)
 check("its own buttons, not the window's again", CALLS.SkinButton - buttonsBefore, 2)
-check("its eight dropdowns", CALLS.SkinDropDown, 1 + 8)
+check("its nine dropdowns", CALLS.SkinDropDown, 1 + 9)
 check("its four checkboxes", CALLS.SkinCheckbox, 2 + 4)
 check("without the Blizzard banner", RB.eventFrame.header:IsShown(), false)
 RB.eventFrame:Hide()

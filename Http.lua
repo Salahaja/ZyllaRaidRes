@@ -221,6 +221,55 @@ function RB.NoteSrValid(ref, event, raid)
     RB.srValid[string.lower(ref)] = out
 end
 
+--[[ Players' raidres accounts, so one can be made an admin of a list they
+     haven't reserved on yet. Kept on this PC only (SavedVariables):
+       RaidResBridge_Users.players[lower(name)] = {name, id, seen}
+       RaidResBridge_Users.mine[id] = true      -- your own, never saved as a player
+     The id is raidres's user-ID, 18-19 digits: kept as the text it came as,
+     since this client's numbers can't hold it exactly. A row made "for
+     another player" carries whoever made it, so it says nothing of theirs. ]]
+local function userId(v)
+    if type(v) == "string" and string.find(v, "^%d+$") then return v end
+    return nil
+end
+
+function RB.Users()
+    if type(RaidResBridge_Users) ~= "table" then RaidResBridge_Users = {} end
+    local u = RaidResBridge_Users
+    if type(u.players) ~= "table" then u.players = {} end
+    if type(u.mine) ~= "table" then u.mine = {} end
+    return u
+end
+
+function RB.NoteUsers(event)
+    if type(event) ~= "table" then return end
+    local u = RB.Users()
+    local me = UnitName and UnitName("player")
+    me = me and string.lower(me)
+    local found = {}
+    for _, r in ipairs(event.reservations or {}) do
+        local c, id = r.character, userId(r.user and r.user.id)
+        if type(c) == "table" and type(c.name) == "string" and id and not c.isTemporary then
+            local k = string.lower(c.name)
+            if k == me then u.mine[id] = true else found[k] = { name = c.name, id = id } end
+        end
+    end
+    local now = time and time() or 0
+    for k, p in pairs(found) do
+        if not u.mine[p.id] then u.players[k] = { name = p.name, id = p.id, seen = now } end
+    end
+    -- your alts, seen before your own account was
+    for k, p in pairs(u.players) do
+        if u.mine[p.id] then u.players[k] = nil end
+    end
+end
+
+--- `name`'s saved raidres user-ID, or nil.
+function RB.UserId(name)
+    local p = name and RB.Users().players[string.lower(name)]
+    return p and userId(p.id)
+end
+
 function RB.Convert(ref, event, raid)
     local byItem = {}
     for _, it in ipairs(raid.raidItems or {}) do byItem[it.id] = it end
@@ -631,6 +680,7 @@ function RB.HttpRequest(ref)
         local event, why = decoded(status, body, "list " .. ref)
         if not event then say("|cffff5179" .. why .. "|r") return end
         RB.NoteEventSr(ref, event)
+        RB.NoteUsers(event)
         if type(event.raidId) ~= "number" then
             say("|cffff5179that list does not say which raid it is for|r.")
             return
@@ -880,6 +930,10 @@ function RB.SendCreateCommand(e)
         opts = opts .. " inc=" .. (e.inc or 0) .. carried(e)
         if e.prev then opts = opts .. " prev=" .. e.prev end
     end
+    -- raidres user-IDs, as the text they were saved as
+    if e.admins and table.getn(e.admins) > 0 then
+        opts = opts .. " admins=" .. table.concat(e.admins, ",")
+    end
     local cmd = "create " .. e.raid .. " " .. e.day .. " " .. e.clock .. " " .. e.limit ..
         " " .. bit(e.lock) .. " " .. bit(e.comments) .. " " .. bit(e.srplus) ..
         " " .. bit(e.dupes) .. opts .. ((desc ~= "" and desc ~= " ") and (" " .. desc) or "")
@@ -942,7 +996,11 @@ end
      themselves, so the game needs only the name. ]]
 function RB.SendAdminCommand(ref, name, add)
     if not RB.LockControlReady() or RB.HelperBusy() then return false end
-    local id = post("admin " .. ref .. " " .. name .. (add and " add" or " remove"))
+    -- a saved account goes too, for someone not on this list; the helper
+    -- prefers the one the list itself shows
+    local saved = RB.UserId(name)
+    local id = post("admin " .. ref .. " " .. name .. (add and " add" or " remove") ..
+        (saved and (" id=" .. saved) or ""))
     if not id then return false end
     RB.createPending = { id = id, admin = ref, name = name, add = add, sent = GetTime() }
     lockTick:Show()

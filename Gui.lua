@@ -922,11 +922,13 @@ local function onPickPlayerMenu()
     end
 end
 
---[[ Can `name` be made an admin of the list from here? Only someone on the
-     raidres list, not you, and not someone only added here: raidres knows
-     a player by the account they signed up with. ]]
+--[[ Can `name` be made an admin of the list from here? Not you. raidres
+     knows a player by their account: someone on the raidres list who isn't
+     only added here, or anyone whose account was saved from an earlier list. ]]
 local function canAdmin(s, name)
-    if not s.web[key(name)] or RB.MySignup(s, name) ~= nil then return false end
+    if RB.MySignup(s, name) ~= nil then return false end
+    if RB.UserId(name) then return true end
+    if not s.web[key(name)] then return false end
     local x = RB.OthersFor(s.ref)[key(name)]
     return not (x and x.added)
 end
