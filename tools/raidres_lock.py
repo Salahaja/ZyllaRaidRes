@@ -1235,16 +1235,21 @@ def main():
         print(result)
         sys.exit(0 if result.startswith("ok") else 1)
 
-    elif cmd in ("reserve", "unreserve"):
+    elif cmd in ("reserve", "unreserve", "reserve-for", "unreserve-for"):
         dry = "--dry-run" in args
         words = [w for w in args[1:] if w != "--dry-run"]
-        remove = cmd == "unreserve"
+        remove = cmd.startswith("unreserve")
+        for_other = cmd.endswith("-for")
+        if for_other and not remove and len(words) != 5:
+            print("usage: raidres_lock.py reserve-for REF ITEMID NAME CLASS SPEC [--dry-run]")
+            sys.exit(1)
         if (remove and len(words) != 3) or (not remove and len(words) not in (4, 5)):
             print("usage: raidres_lock.py reserve REF ITEMID NAME CLASS [SPEC] [--dry-run]")
             print("       raidres_lock.py unreserve REF ITEMID NAME [--dry-run]")
             sys.exit(1)
         result = reserve(words[0], words[1], words[2], None if remove else words[3],
-                         words[4] if len(words) == 5 else None, remove=remove, dry=dry)
+                         words[4] if len(words) == 5 else None, remove=remove, dry=dry,
+                         for_other=for_other)
         print(result)
         sys.exit(0 if result.startswith(("ok", "plan")) else 1)
 
