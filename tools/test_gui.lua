@@ -949,12 +949,14 @@ end
 print("class items for one class")
 do
     -- a loot table of its own: tier for one class, a token for three, a
-    -- libram with no class list, a bag, and one cached before lists were kept
+    -- libram with no class list, a bag, and one cached before lists were
+    -- kept. Kinds as ItemTypes reads raidres's tooltips: tier and tokens get
+    -- no "class" from them, only their class list says so.
     local was = RaidResBridge_Raids[7777]
     RaidResBridge_Raids[7777] = { name = "Test Halls", items = {
-        { g = 1, n = "Lawbringer Helm", b = "A", o = 1, t = "plate class", c = { "Paladin" } },
-        { g = 2, n = "Cenarion Helm", b = "A", o = 1, t = "leather class", c = { "Druid" } },
-        { g = 3, n = "Qiraji Bindings", b = "A", o = 1, t = "class", c = { "Paladin", "Hunter", "Rogue" } },
+        { g = 1, n = "Lawbringer Helm", b = "A", o = 1, t = "plate", c = { "Paladin" } },
+        { g = 2, n = "Cenarion Helm", b = "A", o = 1, t = "leather", c = { "Druid" } },
+        { g = 3, n = "Qiraji Bindings", b = "A", o = 1, t = "", c = { "Paladin", "Hunter", "Rogue" } },
         { g = 4, n = "Libram of Truth", b = "A", o = 1, t = "class", c = {} },
         { g = 5, n = "Core Felcloth Bag", b = "A", o = 1, t = "class", c = {} },
         { g = 6, n = "Old Robe", b = "A", o = 1, t = "class" },
@@ -974,6 +976,28 @@ do
         "Cenarion Helm,Core Felcloth Bag,Old Robe,Qiraji Bindings")
     check("a class pick leaves the other kinds alone",
         names({ class = true, ["cls:DRUID"] = true, ring = true }), "Cenarion Helm,Core Felcloth Bag,Old Robe,Plain Ring")
+    check("Plate alone still shows plate tier", names({ plate = true }), "Lawbringer Helm")
+    -- From raidres's own shape, through the converter: a tier piece's
+    -- tooltip says "<br/>Classes: Paladin<br/>", its kind is only plate.
+    RaidResBridge_Raids[7777] = RB.ConvertRaid({ name = "Shape Halls",
+        raidBosses = { { id = 1, name = "A", position = 0 } }, raidItems = {
+            { gameDbItemId = 11, name = "Lawbringer Boots", quality = 4, raidBosses = { 1 },
+              characterClasses = { "Paladin" },
+              tooltip = "<table><tr><td>Feet</td><th>Plate</th></tr></table>" ..
+                        "<span>515 Armor<br/>Classes: Paladin<br/>Requires Level 60</span>" },
+            { gameDbItemId = 12, name = "Cenarion Boots", quality = 4, raidBosses = { 1 },
+              characterClasses = { "Druid" },
+              tooltip = "<table><tr><td>Feet</td><th>Leather</th></tr></table>" ..
+                        "<span>Classes: Druid<br/></span>" },
+            { gameDbItemId = 13, name = "Plain Boots", quality = 4, raidBosses = { 1 },
+              characterClasses = {},
+              tooltip = "<table><tr><td>Feet</td><th>Plate</th></tr></table>" },
+        } })
+    check("the converter gives tier its armour kind only", RaidResBridge_Raids[7777].items[1].t, "plate")
+    check("Class with Paladin finds raidres's Lawbringer", names({ class = true, ["cls:PALADIN"] = true }),
+        "Lawbringer Boots")
+    check("Class alone finds every class's tier, not plain plate", names({ class = true }),
+        "Cenarion Boots,Lawbringer Boots")
     RaidResBridge_Raids[7777] = was
 
     local function menuValue(v)

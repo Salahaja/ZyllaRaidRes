@@ -236,12 +236,6 @@ end
 
 local SHARED = 999      -- raidres's place for loot more than one boss drops
 
---[[ Does an item pass the Show menu? raidres's own rules: any one of the
-     kinds ticked will do, and "Hard reserved" also needs the item to be
-     hard-reserved. `show` is a set of the kind keys Http.lua's ItemTypes
-     gives (cloth, plate, weapon, ...) plus "hr". An item from a loot table
-     cached before kinds were kept matches no kind; the menu offers the
-     update that adds them. ]]
 -- A relic says its class only in its name: raidres lists no classes for it.
 local RELICS = { { "^Libram", "PALADIN" }, { "^Idol", "DRUID" }, { "^Totem", "SHAMAN" } }
 
@@ -276,6 +270,22 @@ local function pickedClasses(show)
     return out
 end
 
+--[[ Is it of kind `k`? By the kinds Http.lua's ItemTypes read from its
+     tooltip -- and for Class, also any item raidres limits to some classes.
+     raidres's own Class tab looks for ">classes: </", which a tooltip's
+     "<br/>Classes: Paladin<br/>" never has, so tier and tokens would miss
+     it there; the table's class list catches them. ]]
+local function ofKind(it, k)
+    if it.t and string.find(" " .. it.t .. " ", " " .. k .. " ", 1, true) then return true end
+    return k == "class" and type(it.c) == "table" and table.getn(it.c) > 0
+end
+
+--[[ Does an item pass the Show menu? raidres's own rules: any one of the
+     kinds ticked will do, and "Hard reserved" also needs the item to be
+     hard-reserved. `show` is a set of the kind keys Http.lua's ItemTypes
+     gives (cloth, plate, weapon, ...) plus "hr". An item from a loot table
+     cached before kinds were kept matches no kind; the menu offers the
+     update that adds them. ]]
 function RB.ItemShown(it, show, hard)
     if not show or not next(show) then return true end
     if show.hr and not (hard and hard[it.g]) then return false end
@@ -284,8 +294,7 @@ function RB.ItemShown(it, show, hard)
     for k in pairs(show) do
         if k ~= "hr" and not string.find(k, "^cls:") then
             kinds = true
-            if it.t and string.find(" " .. it.t .. " ", " " .. k .. " ", 1, true)
-               and (k ~= "class" or not picked or forClasses(it, picked)) then
+            if ofKind(it, k) and (k ~= "class" or not picked or forClasses(it, picked)) then
                 return true
             end
         end
