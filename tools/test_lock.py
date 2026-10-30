@@ -310,6 +310,33 @@ try:
     check("and one you made for them comes back off", [(x["method"], x["url"]) for x in sent],
           [("DELETE", "/api/raid-event-reservations/777")])
 
+    print("anyone's reserve, as the list's owner or an admin")
+    brisa = [r for r in OPEN["reservations"] if r["character"]["name"] == "Brisa"]
+    brisa_item = GAME_ID[brisa[0]["raidItemId"]]
+    not_brisas = next(g for i, g in GAME_ID.items() if i not in [r["raidItemId"] for r in brisa])
+    theirs = {"forOther": True, "theirs": True}
+    answer, sent = run(args(brisa_item, "Brisa", remove=True) | theirs, event=owner)
+    check("an owner removes one they made themselves", [(x["method"], x["url"]) for x in sent],
+          [("DELETE", "/api/raid-event-reservations/%d" % brisa[0]["id"])])
+    check("and hears it went", answer, {"result": "ok", "done": "removed"})
+    answer, sent = run(args(brisa_item, "Brisa", remove=True) | theirs,
+                       event=copy.deepcopy(OPEN) | {"isAuthor": False, "extraAdministratorUserIds": ["1000"]})
+    check("so does an admin of the list", len(sent), 1)
+    answer, sent = run(args(brisa_item, "Brisa", remove=True) | theirs,
+                       event=copy.deepcopy(OPEN) | {"isAuthor": False})
+    check("nobody else", (answer.get("message"), sent),
+          ("only the list's owner or its admins can remove someone's reserve", []))
+    answer, sent = run(args(not_brisas, "Brisa", remove=True) | theirs, event=owner)
+    check("one they don't hold is refused", (answer.get("message"), sent),
+          ("Brisa hasn't reserved that on raidres", []))
+    answer, sent = run(args(brisa_item, "Brisa", remove=True) | {"forOther": True}, event=owner)
+    check("unreserve-for still takes back only what you made", (answer.get("message"), sent),
+          ("Brisa hasn't reserved that on raidres", []))
+    answer, sent = run(args(brisa_item, "Brisa", remove=True, dry=True) | theirs, event=owner)
+    check("a dry run names the row and sends nothing", (answer.get("id"), sent), (brisa[0]["id"], []))
+    check("the watcher wants three words after it", w.run_command("unreserve-theirs DEMO42 123"),
+          "error: bad command")
+
     print("taking one back")
     answer, sent = run(args(HELD, "Aldwyn", remove=True), event=OPEN)
     held_row = next(r["id"] for r in EVENT["reservations"]

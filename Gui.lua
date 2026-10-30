@@ -449,6 +449,9 @@ function RB.Snapshot()
     -- On raidres: each player's items, how many copies of each (an item
     -- can be reserved twice), and whether an officer validated its SR+.
     s.webCount, s.valid = {}, (ref and RB.srValid and RB.srValid[string.lower(ref)]) or {}
+    -- which of them a player made themselves (Http.lua's RB.webOwn); nil
+    -- when the list doesn't say, fetched without the DLL
+    s.own = ref and RB.webOwn and RB.webOwn[string.lower(ref)]
     if fetched then
         for _, p in ipairs(fetched.softreserves or {}) do
             local set, n = {}, 0
@@ -838,7 +841,8 @@ function RB.OnReserveResult(pending, text)
     end
     if string.sub(text, 1, 3) == "ok " then
         RB.sessionExpired = nil
-        RB.Notice((pending.remove and "took back " or "reserved ") .. name ..
+        RB.Notice((pending.theirs and ("removed " .. pending.name .. "'s ")
+                   or (pending.remove and "took back " or "reserved ")) .. name ..
             " on raidres. Fetching the list again...")
         RB.Request(pending.ref)
     elseif text == "needspec" then
@@ -961,6 +965,91 @@ function RB.ReserveForOther(id, remove, spec)
     end
     RB.Notice((remove and "taking back " or "reserving ") .. RB.ItemInfo(id) ..
         " on raidres for " .. who .. "...")
+    RB.Draw()
+end
+
+-- ---------------------------------------------------------------------------
+-- Anyone's reserve, taken back as the list's owner or one of its admins
+--
+-- raidres's site lets them remove any reserve, one a player made themselves
+-- too. The game can't tell who runs a list, so the helper checks; here it is
+-- offered on a raidres list, with the lock helper, for anyone but you, and
+-- always asks first.
+-- ---------------------------------------------------------------------------
+
+function RB.CanRemoveTheirs(s, name)
+    return name and s and s.ref and s.ref ~= "manual" and RB.MySignup(s, name) == nil
+        and RB.LockControlReady and RB.LockControlReady() and true or false
+end
+
+--- Did `name` reserve `id` themselves? nil when the list doesn't say.
+function RB.TheirOwn(s, name, id)
+    if not s.own then return nil end
+    local theirs = s.own[key(name)]
+    return (theirs and theirs[id]) and true or false
+end
+
+--[[ Does a click on `name`'s raidres reserve of `id` take back theirs,
+     asking first? Yes for one they made themselves. One made for them is
+     yours to take back without asking (RB.ReserveForOther), and so is any
+     while the list doesn't say which it is. ]]
+function RB.ClickRemovesTheirs(s, name, id)
+    if not RB.CanRemoveTheirs(s, name) then return false end
+    local k = key(name)
+    if not (s.web[k] and s.web[k][id]) then return false end
+    if RB.ReservesForOther(s, name) then return RB.TheirOwn(s, name, id) == true end
+    return true
+end
+
+--- Ask, then take back the shown player's reserve of `id` on raidres.
+function RB.AskRemoveTheirs(id)
+    local s = RB.gui and RB.gui.snap
+    local who = RB.player
+    if not s or not who then return end
+    if RB.HelperBusy() then
+        RB.Notice("still waiting on raidres for the last one.")
+        return
+    end
+    if RB.sessionExpired then
+        RB.Notice("your raidres session expired: click Sign in at the top first.")
+        return
+    end
+    if s.locked then
+        RB.Notice("the list is locked on raidres. Unlock it to change reserves.")
+        return
+    end
+    local plus = 0
+    for _, it in ipairs(s.items[key(who)] or {}) do
+        if it.id == id then plus = math.max(plus, tonumber(it.sr_plus) or 0) end
+    end
+    RB.removeTarget = { ref = s.ref, item = id, name = who }
+    if not StaticPopupDialogs.ZYLLARAIDRES_REMOVETHEIRS then
+        StaticPopupDialogs.ZYLLARAIDRES_REMOVETHEIRS = {
+            text = "Remove %s on raidres?%s",
+            button1 = "Remove",
+            button2 = "Cancel",
+            OnAccept = function() RB.RemoveTheirs() end,
+            timeout = 0, whileDead = 1, hideOnEscape = 1,
+        }
+    end
+    StaticPopup_Show("ZYLLARAIDRES_REMOVETHEIRS", who .. "'s " .. RB.ItemInfo(id),
+        (plus > 0 and ("\nTheir SR+ of +" .. plus .. " goes with it.") or "") ..
+        "\n\nOnly the list's owner or its admins can.")
+end
+
+function RB.RemoveTheirs()
+    local t = RB.removeTarget
+    RB.removeTarget = nil
+    if not t then return end
+    if RB.HelperBusy() then
+        RB.Notice("still waiting on raidres for the last one.")
+        return
+    end
+    if not RB.SendRemoveTheirsCommand(t.ref, t.item, t.name) then
+        RB.Notice("can't reach the lock script. Is Nampower loaded?")
+        return
+    end
+    RB.Notice("removing " .. t.name .. "'s " .. RB.ItemInfo(t.item) .. " on raidres...")
     RB.Draw()
 end
 
@@ -1181,6 +1270,10 @@ function RB.ClickItem(data)
         RB.ReserveOnRaidres(id, (s.web[k] and s.web[k][id]) and true or false)
         return
     end
+    if RB.ClickRemovesTheirs(s, who, id) then
+        RB.AskRemoveTheirs(id)
+        return
+    end
     if RB.ReservesForOther(s, who) then
         RB.ReserveForOther(id, (s.web[k] and s.web[k][id]) and true or false)
         return
@@ -1311,6 +1404,8 @@ function RB.ItemTooltip(owner, id)
             if mine and s.web[k] and s.web[k][id] and not typedHere then
                 if onRaidres then
                     GameTooltip:AddLine("Click: take it back on raidres", 0.13, 1, 0.13)
+                elseif RB.ClickRemovesTheirs(s, who, id) then
+                    GameTooltip:AddLine("Click: remove " .. who .. "'s on raidres (asks first)", 0.13, 1, 0.13)
                 elseif forOther then
                     GameTooltip:AddLine("Click: take it back on raidres for " .. who, 0.13, 1, 0.13)
                 else
@@ -1635,7 +1730,9 @@ local function buildPlayers(f)
         row.remove:SetScript("OnClick", function()
             local r = this:GetParent()
             if not r.itemId or not RB.player then return end
-            if r.onRaidres and RB.ReservesForOther(RB.gui.snap, RB.player) then
+            if r.theirs then
+                RB.AskRemoveTheirs(r.itemId)
+            elseif r.onRaidres and RB.ReservesForOther(RB.gui.snap, RB.player) then
                 RB.ReserveForOther(r.itemId, true)
             elseif r.onRaidres then
                 RB.ReserveOnRaidres(r.itemId, true)
@@ -3134,10 +3231,20 @@ local function drawDetail(f, s, sel)
         local many = copies[it.id]
         row.text:SetText(hex(qualityHex(q), name) .. (many > 1 and hex(WHITE, " x" .. many) or "") ..
             (plus > 0 and hex(valid[it.id] and GREEN or GOLD, "  +" .. plus) or ""))
-        row.onRaidres = (web[it.id] and onRaidres) and true or nil
+        -- theirs: one they made themselves, which the list's owner or admins
+        -- can take back too, asked first
+        row.theirs = RB.ClickRemovesTheirs(s, RB.player, it.id) or nil
+        row.onRaidres = (web[it.id] and onRaidres and not row.theirs) and true or nil
         row.web, row.srPlus, row.valid = web[it.id] and true or nil, plus, valid[it.id]
         row.copies = many
-        if row.onRaidres then
+        if row.theirs then
+            row.tag:Show()
+            row.mine:Hide()
+            row.remove:Show()
+            row.remove.tipBody = (many > 1 and ("Remove one of " .. RB.player .. "'s " .. many .. " copies on raidres.")
+                or ("Remove " .. RB.player .. "'s reserve on raidres.")) ..
+                " Only the list's owner or its admins can; it asks first."
+        elseif row.onRaidres then
             row.tag:Hide()
             row.mine:Show()
             row.remove:Show()
@@ -3157,7 +3264,7 @@ local function drawDetail(f, s, sel)
     end
     if rowsNeeded > D_ROWS then
         local row = f.dRows[D_ROWS]
-        row.itemId, row.onRaidres = nil, nil
+        row.itemId, row.onRaidres, row.theirs = nil, nil, nil
         row.icon:Hide()
         row.text:SetText(hex(GREY, "+" .. (rowsNeeded - shown) .. " more (hover their name)"))
         row.tag:Hide()

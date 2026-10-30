@@ -2555,6 +2555,54 @@ do
     RaidResBridge_Users = nil
 end
 
+print("anyone's reserve, as the list's owner or an admin")
+do
+    RB.player = "Brisa"
+    RB.Refresh()
+    local row = f.dRows[1]
+    local id = row.itemId
+    check("a reserve they made themselves gets an X", (row.theirs and row.remove:IsShown()) and true or false, true)
+    check("which says who may take it",
+        string.find(row.remove.tipBody or "", "Only the list's owner or its admins can", 1, true) ~= nil, true)
+    RB.ItemTooltip(row, id)
+    check("the loot's tooltip says a click removes theirs", tipHas("Click: remove Brisa's on raidres (asks first)"), true)
+    FILES[CMD4], POPUP = nil, nil
+    click(row.remove)
+    check("it asks first", POPUP and POPUP.which, "ZYLLARAIDRES_REMOVETHEIRS")
+    check("naming whose", string.find(POPUP and POPUP.arg or "", "Brisa's ", 1, true), 1)
+    check("and sends nothing before the yes", FILES[CMD4], nil)
+    StaticPopupDialogs.ZYLLARAIDRES_REMOVETHEIRS.OnAccept()
+    check("then it goes as anyone's", FILES[CMD4], "unreserve-theirs DEMO42 " .. id .. " Brisa")
+    FILES["RaidResBridge_request.txt"] = nil
+    FILES[RESULT4] = "ok removed"
+    run(1)
+    check("and says whose went", string.find(hint(f), "removed Brisa's ", 1, true) ~= nil, true)
+    check("then fetches the list again", FILES["RaidResBridge_request.txt"], "DEMO42")
+    FILES[CMD4], POPUP = nil, nil
+    RB.ClickItem({ item = { g = id } })
+    check("a click on the loot asks too", POPUP and POPUP.which, "ZYLLARAIDRES_REMOVETHEIRS")
+    StaticPopupDialogs.ZYLLARAIDRES_REMOVETHEIRS.OnAccept()
+    FILES[RESULT4] = "error: only the list's owner or its admins can remove someone's reserve"
+    run(1)
+    check("raidres's no in its words",
+        string.find(hint(f), "raidres: only the list's owner or its admins", 1, true) ~= nil, true)
+    -- someone you reserve for: one you made for them goes without asking,
+    -- one they made themselves asks, and while the list doesn't say, as before
+    RB.OthersFor("DEMO42").brisa = { name = "Brisa", on = true }
+    RB.webOwn.demo42 = { brisa = {} }
+    RB.Refresh()
+    check("one made for them is yours to take back, unasked", RB.ClickRemovesTheirs(f.snap, "Brisa", id), false)
+    RB.webOwn.demo42 = { brisa = { [id] = true } }
+    RB.Refresh()
+    check("one they made themselves still asks", RB.ClickRemovesTheirs(f.snap, "Brisa", id), true)
+    RB.webOwn.demo42 = nil
+    RB.Refresh()
+    check("while the list doesn't say, it's taken back as yours", RB.ClickRemovesTheirs(f.snap, "Brisa", id), false)
+    RB.OthersFor("DEMO42").brisa = nil
+    check("never offered for you", RB.CanRemoveTheirs(f.snap, "Tester"), false)
+    RB.Refresh()
+end
+
 print("and not for yourself, or without the helper")
 fire(findRow(f.pRows, "Tester"), "OnClick", "RightButton")
 local selfToggle

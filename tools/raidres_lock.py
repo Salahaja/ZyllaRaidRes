@@ -24,6 +24,9 @@ Usage
                                         your own soft reserve on event REF,
                                         by WoW item id; --dry-run looks
                                         everything up and sends nothing
+  python raidres_lock.py unreserve-theirs REF ITEMID NAME [--dry-run]
+                                        anyone's reserve on your list REF,
+                                        as its owner or one of its admins
   python raidres_lock.py create RAIDID YYYY-MM-DD HH:MM LIMIT LOCK COMMENTS SRPLUS DUPES
                                 [DESCRIPTION...] [--dry-run]
                                         a new event; switches are 0/1, the
@@ -509,7 +512,9 @@ async (a) => {
   if (a.forOther) {
     const admins = (e.extraAdministratorUserIds || []).map(String);
     if (e.isAuthor === false && !admins.includes(String(who)))
-      return answer({ result: 'error', message: "only the list's owner or its admins can reserve for others" });
+      return answer({ result: 'error', message: a.theirs
+        ? "only the list's owner or its admins can remove someone's reserve"
+        : "only the list's owner or its admins can reserve for others" });
     const theirOwn = (e.reservations || []).some(r => r.character && r.user
       && String(r.character.name).toLocaleLowerCase() === name && String(r.user.id) !== String(who));
     if (theirOwn && !a.remove)
@@ -519,7 +524,11 @@ async (a) => {
   if (a.remove) {
     // of two copies, the one with the least SR+ goes (the later one, if alike)
     const sp = r => (r.srPlus && Number(r.srPlus.value)) || 0;
-    const row = held.filter(r => ids.includes(r.raidItemId))
+    // theirs: any reserve made as that character, their own sign-up too,
+    // which the list's owner and its admins may remove, as on the site
+    const pool = a.theirs ? (e.reservations || []).filter(r => r.character
+      && String(r.character.name).toLocaleLowerCase() === name) : held;
+    const row = pool.filter(r => ids.includes(r.raidItemId))
       .reduce((low, r) => (low && sp(low) < sp(r)) ? low : r, null);
     if (!row) return answer({ result: 'error', message: a.name + " hasn't reserved that on raidres" });
     if (a.dry) return answer({ result: 'plan', method: 'DELETE', id: row.id });
@@ -589,7 +598,12 @@ def reserve_line(answer):
         return "plan " + json.dumps(answer)
     return "error: " + (answer.get("message") or "raidres didn't say why")
 
-def reserve(ref, item, name, cls, spec=None, remove=False, dry=False, for_other=False):
+def reserve(ref, item, name, cls, spec=None, remove=False, dry=False, for_other=False,
+            theirs=False):
+    """theirs: take back a reserve whoever made it, their own sign-up too --
+    for the list's owner and its admins (unreserve-theirs)."""
+    if theirs:
+        remove = for_other = True
     try:
         item = check_reserve(ref, item, name, cls, spec, remove)
     except ValueError as e:
@@ -603,7 +617,8 @@ def reserve(ref, item, name, cls, spec=None, remove=False, dry=False, for_other=
         if not tab or not tab.get("webSocketDebuggerUrl"):
             return "error: could not open a raidres tab in Chrome"
     args = {"ref": ref, "item": item, "name": name, "cls": cls, "spec": spec,
-            "remove": bool(remove), "dry": bool(dry), "forOther": bool(for_other)}
+            "remove": bool(remove), "dry": bool(dry), "forOther": bool(for_other),
+            "theirs": bool(theirs)}
     ws = WebSocket(tab["webSocketDebuggerUrl"])
     try:
         # The arguments go in as JSON: nothing the game sent can become code.
@@ -1252,7 +1267,10 @@ def run_command(line):
     # reserve REF ITEM NAME CLASS [SPEC]  /  unreserve REF ITEM NAME
     # reserve-for REF ITEM NAME CLASS SPEC  /  unreserve-for REF ITEM NAME:
     # the same for another player, as an admin (spec required)
-    if words and words[0] in ("reserve", "unreserve", "reserve-for", "unreserve-for"):
+    # unreserve-theirs REF ITEM NAME: anyone's, their own sign-up too
+    if words and words[0] in ("reserve", "unreserve", "reserve-for", "unreserve-for",
+                              "unreserve-theirs"):
+        theirs = words[0] == "unreserve-theirs"
         for_other = words[0].endswith("-for")
         remove = words[0].startswith("unreserve")
         sizes = (4,) if remove else ((6,) if for_other else (5, 6))
@@ -1263,7 +1281,7 @@ def run_command(line):
             result = reserve(words[1], words[2], words[3],
                              None if remove else words[4],
                              words[5] if len(words) == 6 else None, remove=remove,
-                             for_other=for_other)
+                             for_other=for_other, theirs=theirs)
         log("  -> %s" % result)
         return result
 
@@ -1408,11 +1426,12 @@ def main():
         print(result)
         sys.exit(0 if result.startswith("ok") else 1)
 
-    elif cmd in ("reserve", "unreserve", "reserve-for", "unreserve-for"):
+    elif cmd in ("reserve", "unreserve", "reserve-for", "unreserve-for", "unreserve-theirs"):
         dry = "--dry-run" in args
         words = [w for w in args[1:] if w != "--dry-run"]
         remove = cmd.startswith("unreserve")
         for_other = cmd.endswith("-for")
+        theirs = cmd == "unreserve-theirs"
         if for_other and not remove and len(words) != 5:
             print("usage: raidres_lock.py reserve-for REF ITEMID NAME CLASS SPEC [--dry-run]")
             sys.exit(1)
@@ -1422,7 +1441,7 @@ def main():
             sys.exit(1)
         result = reserve(words[0], words[1], words[2], None if remove else words[3],
                          words[4] if len(words) == 5 else None, remove=remove, dry=dry,
-                         for_other=for_other)
+                         for_other=for_other, theirs=theirs)
         print(result)
         sys.exit(0 if result.startswith(("ok", "plan")) else 1)
 

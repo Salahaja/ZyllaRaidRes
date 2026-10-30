@@ -585,6 +585,16 @@ for the list's owner and its admins, and the reserve is filed under your
 raidres account, so they can't change it on the site; you and the list's admins
 can. Someone who signed up on raidres themselves is left to change their own.
 
+**Removing anyone's reserve**: as on the site, the list's owner and its admins
+can take back a reserve someone made themselves. Pick the player, then click
+the X beside their raidres reserve, or click the item in the loot list. It
+always asks first, and says when their SR+ goes with it. The helper checks
+that you run the list before it removes anything. For someone you also reserve
+for, telling their own reserves from ones you made for them needs
+RaidResHttp.dll; without it, their X takes back only what you made. From a
+terminal:
+`python tools/raidres_lock.py unreserve-theirs REF ITEMID NAME --dry-run`.
+
 **Making someone an admin of the list**: right-click a player on a raidres
 list and pick **Make admin of this list** or **Remove as admin**. raidres knows
 them by the account they signed up with: someone who reserved on the site

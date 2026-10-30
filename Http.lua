@@ -221,6 +221,29 @@ function RB.NoteSrValid(ref, event, raid)
     RB.srValid[string.lower(ref)] = out
 end
 
+--[[ Which reserves a player made themselves, not one made for them ("for
+     another player", isTemporary): taking one of theirs back is for the
+     list's owner or admins, and asks first.
+       RB.webOwn[lower(ref)][lower(name)][WoW item id] = true
+     Not known for a list fetched without the DLL: no entry for its ref. ]]
+RB.webOwn = RB.webOwn or {}
+function RB.NoteOwnRows(ref, event, raid)
+    if not ref or type(event) ~= "table" then return end
+    local byItem = {}
+    for _, it in ipairs((raid and raid.raidItems) or {}) do byItem[it.id] = it.gameDbItemId end
+    local out = {}
+    for _, r in ipairs(event.reservations or {}) do
+        local item = byItem[r.raidItemId]
+        local c = r.character
+        if item and type(c) == "table" and type(c.name) == "string" and not c.isTemporary then
+            local k = string.lower(string.gsub(c.name, "%s", ""))
+            out[k] = out[k] or {}
+            out[k][item] = true
+        end
+    end
+    RB.webOwn[string.lower(ref)] = out
+end
+
 --[[ Players' raidres accounts, so one can be made an admin of a list they
      haven't reserved on yet. Kept on this PC only (SavedVariables):
        RaidResBridge_Users.players[lower(name)] = {name, id, seen}
@@ -692,6 +715,7 @@ function RB.HttpRequest(ref)
 
             local data, stats = RB.Convert(ref, event, raid)
             RB.NoteSrValid(ref, event, raid)
+            RB.NoteOwnRows(ref, event, raid)
             RB.Store(ref, data, stats)
 
             RB.LoadRaids()
@@ -876,6 +900,18 @@ function RB.SendReserveCommand(ref, itemId, name, class, spec, remove, forOther)
     if not id then return false end
     RB.reservePending = { id = id, ref = ref, item = itemId, name = name, class = class,
                           remove = remove, forOther = forOther, sent = GetTime() }
+    lockTick:Show()
+    return true
+end
+
+--[[ Anyone's reserve, their own sign-up too, taken back as the list's owner
+     or one of its admins: unreserve-theirs REF ITEMID NAME -> ok removed. ]]
+function RB.SendRemoveTheirsCommand(ref, itemId, name)
+    if not RB.LockControlReady() or RB.HelperBusy() then return false end
+    local id = post("unreserve-theirs " .. ref .. " " .. itemId .. " " .. name)
+    if not id then return false end
+    RB.reservePending = { id = id, ref = ref, item = itemId, name = name,
+                          remove = true, forOther = true, theirs = true, sent = GetTime() }
     lockTick:Show()
     return true
 end

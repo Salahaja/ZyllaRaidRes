@@ -211,6 +211,13 @@ do
         srPlus = { id = 999, value = 10, isValid = false } })
     RB.NoteSrValid("SRPLUS", srEvent, raid)
     check("two copies count as validated only when both are", RB.srValid.srplus.aldwyn[gameOf[6570]], nil)
+    -- which reserves a player made themselves, not ones made for them
+    table.insert(srEvent.reservations, { id = 1000, raidItemId = 6588, srPlus = nil,
+        character = { name = "Made For", isTemporary = true }, user = { id = "1000" } })
+    RB.NoteOwnRows("SRPLUS", srEvent, raid)
+    check("one they made themselves is theirs", RB.webOwn.srplus.brisa[gameOf[6557]], true)
+    check("one made for them isn't", RB.webOwn.srplus.madefor, nil)
+    check("a list fetched another way says nothing", RB.webOwn.demo42, nil)
     local values = {}
     for _, p in ipairs(sr.softreserves) do
         for _, it in ipairs(p.items) do
