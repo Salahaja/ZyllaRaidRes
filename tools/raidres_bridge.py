@@ -158,7 +158,10 @@ def build(ref):
         "skipped": skipped,
         "raid": raid.get("name", "?"),
         "limit": event.get("reservationLimit"),
-        "locked": event.get("locked"),
+        # null is a list nobody has locked or unlocked yet: open, as on the
+        # site. Only an event with no "locked" at all is unknown.
+        "locked": False if "locked" in event and event["locked"] is None
+                  else event.get("locked"),
     }
 
 

@@ -542,6 +542,20 @@ do
     SlashCmdList.RAIDRESBRIDGE("DEMO42")
     run(3)
     check("nor is a lock that isn't true or false", string.find(FILES["RaidResBridge_data.lua"], "Locked", 1, true), nil)
+
+    -- a list nobody has locked or unlocked yet: raidres sends null
+    SITE["/api/events/DEMO42"] = eventPage(function(b) return (string.gsub(b, '"locked":true', '"locked":null')) end)
+    check("the page says null", string.find(SITE["/api/events/DEMO42"].body, '"locked":null', 1, true) ~= nil, true)
+    SlashCmdList.RAIDRESBRIDGE("DEMO42")
+    run(3)
+    check("a list never locked is open", RB.LockState("DEMO42"), false)
+    check("and is written down as unlocked",
+        string.find(FILES["RaidResBridge_data.lua"], "RaidResBridge_Locked = false", 1, true) ~= nil, true)
+    SITE["/api/events/DEMO42"] = eventPage(function(b) return (string.gsub(b, '"locked":true', '"locked" : null')) end)
+    RaidResBridge_Locked, RB.lockInfo = nil, nil
+    SlashCmdList.RAIDRESBRIDGE("DEMO42")
+    run(3)
+    check("spaced out, too", RB.LockState("DEMO42"), false)
 end
 
 print("looking again, quietly")
@@ -595,11 +609,23 @@ do
     run(3)
     check("an answer that isn't true or false is a failed look too", RB.pollFailed, 2)
     check("and changes nothing", RB.LockState("DEMO42"), false)
+    SITE["/api/events/DEMO42"] = eventPage(function(b) return (string.gsub(b, '"locked":true,', "")) end)
+    RB.HttpPollLock("DEMO42")
+    run(3)
+    check("nor does an event that doesn't say", RB.pollFailed, 3)
     SITE["/api/events/DEMO42"] = { status = 201, body = slurp("event_DEMO42.json") }
     RB.HttpPollLock("DEMO42")
     run(3)
     check("the next that works resets the count", RB.pollFailed, 0)
     check("and takes the new answer", RB.LockState("DEMO42"), true)
+
+    -- a list nobody has locked or unlocked yet
+    RB.pollFailed = 1
+    SITE["/api/events/DEMO42"] = eventPage(function(b) return (string.gsub(b, '"locked":true', '"locked":null')) end)
+    RB.HttpPollLock("DEMO42")
+    run(3)
+    check("null is a look that works", RB.pollFailed, 0)
+    check("and reads as open", RB.LockState("DEMO42"), false)
 
     check("with no window there is nothing to time the looks", RB.MaybePollLock(), false)
 end

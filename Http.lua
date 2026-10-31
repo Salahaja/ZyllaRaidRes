@@ -584,6 +584,20 @@ local function decoded(status, body, what)
     return v
 end
 
+--[[ Whether raidres has a list locked: true, false, or nil when the event
+     doesn't say. A list nobody has locked or unlocked yet comes as
+     "locked": null, which raidres's own site takes as open. The decoder drops
+     a null along with its key, so the reply's text is asked whether it was
+     there; an event with no "locked" at all stays unknown. ]]
+local function eventLocked(event, body)
+    if type(event.locked) == "boolean" then return event.locked end
+    if event.locked == nil and type(body) == "string"
+        and string.find(body, '"locked"%s*:%s*null') then
+        return false
+    end
+    return nil
+end
+
 --[[ Is SR+ on for a list? Read off the event replies the window already
      gets -- the fetch, and the half-minute look at the lock -- so knowing
      costs no request of its own. ]]
@@ -664,14 +678,15 @@ function RB.HttpPollLock(ref)
     RB.Get("/api/events/" .. ref, function(status, body)
         RB.polling = nil
         local event = decoded(status, body, "list " .. ref)
-        if not event or type(event.locked) ~= "boolean" then
+        local locked = event and eventLocked(event, body)
+        if locked == nil then
             RB.pollFailed = (RB.pollFailed or 0) + 1
             return
         end
         RB.pollFailed = 0
         RB.NoteEventSr(ref, event)
         if RB.activeRef and string.lower(RB.activeRef) ~= string.lower(ref) then return end
-        RB.SetLock(ref, event.locked)
+        RB.SetLock(ref, locked)
         -- The window draws from its last snapshot: bring its lock up to date.
         local s = RB.gui and RB.gui:IsVisible() and RB.gui.snap
         if s then
@@ -714,6 +729,7 @@ function RB.HttpRequest(ref)
     RB.Get("/api/events/" .. ref, function(status, body)
         local event, why = decoded(status, body, "list " .. ref)
         if not event then say("|cffff5179" .. why .. "|r") return end
+        event.locked = eventLocked(event, body)
         RB.NoteEventSr(ref, event)
         RB.NoteUsers(event)
         if type(event.raidId) ~= "number" then
