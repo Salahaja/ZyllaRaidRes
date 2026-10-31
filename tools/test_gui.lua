@@ -125,6 +125,7 @@ end
 function W:GetHighlightTexture() return self.hl end
 function W:SetBlendMode(m) self.blend = m end
 function W:SetPoint(p, rel, rp, x, y) self.point = { p, rel, rp, x, y } end
+function W:SetWidth(w) self.sized = w end
 function W:LockHighlight() self.locked = true end
 function W:UnlockHighlight() self.locked = false end
 function W:SetValue(v)
@@ -137,6 +138,10 @@ end
 CreateFrame = function(kind, name, parent, template)
     local w = new(kind, name, parent)
     if template == "UICheckButtonTemplate" and name then new("FontString", name .. "Text", w) end
+    if template == "UIDropDownMenuTemplate" and name then
+        new("Texture", name .. "Left", w)
+        new("FontString", name .. "Text", w)
+    end
     if template == "FauxScrollFrameTemplate" then
         local bar = new("Slider", name .. "ScrollBar", w)
         bar.value = 0
@@ -1923,6 +1928,14 @@ check("Escape closes it", escapes, true)
 check("the raid starts as the window's", ev.raid.ddText, "Zul'Gurub")
 check("today", string.find(ev.day.ddText, "Today, ", 1, true) == 1, true)
 check("at 20:00", ev.hour.ddText .. ":" .. ev.minute.ddText, "20:00")
+-- 1.12 gives a box's text its width less 25: 11 pixels in the time's
+-- boxes, too few for "20", which showed as "...".
+check("the hour's text has the box's inside, not width less 25",
+    NAMED["ZyllaRaidResEventHourText"].sized, 20)
+check("from just past the box's left edge",
+    NAMED["ZyllaRaidResEventHourText"].point[2] == NAMED["ZyllaRaidResEventHourLeft"] and
+    NAMED["ZyllaRaidResEventHourText"].point[4], 24)
+check("SR+ each event's too", NAMED["ZyllaRaidResEventIncText"].sized, 24)
 check("one reserve each, as raidres's form starts", ev.limit.ddText, "1")
 check("comments on and the rest off, as raidres's form starts",
     tostring(ev.comments:GetChecked()) .. tostring(ev.lock:GetChecked()) ..
@@ -1969,6 +1982,40 @@ pick(openMenu(ev.hr)[2])
 UIDROPDOWNMENU_MENU_LEVEL, UIDROPDOWNMENU_MENU_VALUE = nil, nil
 check("ticking one again takes it off", ev.hr.ddText, "1 item")
 hrIds = tostring(loot[1].value)
+
+-- A boss's loot longer than a screen-safe menu comes in even parts.
+do
+local realRaids = RaidResBridge_Raids
+local function lootOf(boss, n, from)
+    local out = {}
+    for i = 1, n do table.insert(out, { g = from + i, n = boss .. " item " .. i, b = boss }) end
+    return out
+end
+local longRaid = { name = "Blackwing Lair", items = {} }
+for _, part in ipairs({ lootOf("Kazzak", 79, 1000), lootOf("Firemaw", 20, 2000), lootOf("Nefarian", 21, 3000) }) do
+    for _, it in ipairs(part) do table.insert(longRaid.items, it) end
+end
+RaidResBridge_Raids = { [94] = longRaid }
+local parts, sizes, firsts = {}, {}, {}
+for _, info in ipairs(openMenu(ev.hr)) do
+    if info.hasArrow then
+        table.insert(parts, info.text)
+        UIDROPDOWNMENU_MENU_LEVEL, UIDROPDOWNMENU_MENU_VALUE = 2, info.value
+        local items = openMenu(ev.hr)
+        table.insert(sizes, table.getn(items))
+        table.insert(firsts, items[1] and items[1].value or "-")
+        UIDROPDOWNMENU_MENU_LEVEL, UIDROPDOWNMENU_MENU_VALUE = nil, nil
+    end
+end
+RaidResBridge_Raids = realRaids
+check("a long boss comes in parts; 20 items or fewer stay whole", table.concat(parts, "|"),
+    "Kazzak (1 of 4)|Kazzak (2 of 4)|Kazzak (3 of 4)|Kazzak (4 of 4)|Firemaw|Nefarian (1 of 2)|Nefarian (2 of 2)")
+check("even parts of 20 or fewer, so a menu always fits the screen",
+    table.concat(sizes, ","), "20,20,20,19,20,11,10")
+check("each part goes on where the last stopped, in the loot table's order",
+    table.concat(firsts, ","), "1001,1021,1041,1061,2001,3001,3012")
+end
+
 check("SR+ settings hide while SR+ is off", ev.inc:IsShown(), false)
 ev.srplus:SetChecked(1)
 fire(ev.srplus, "OnClick")

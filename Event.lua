@@ -193,17 +193,41 @@ end
 -- Hard reserves: none, one of your saved lists, or items picked boss by boss
 -- ---------------------------------------------------------------------------
 
--- The chosen raid's cached loot, by boss, in the loot table's order.
+--[[ The chosen raid's cached loot, by boss, in the loot table's order. A boss
+     with more than PART items comes in even parts, "Lucifron (1 of 2)" and so
+     on: 1.12 turns a menu that won't fit below its row upward from that row,
+     with nothing stopping it at the top of the screen, so a longer list ran
+     off it (and a world boss's, up to 79, passed the 40 rows a menu holds).
+     PART rows fit either way on the client's 768-high screen. ]]
+local PART = 20
+
 local function bosses(raidId)
     local raid = (RaidResBridge_Raids or {})[raidId]
-    local out, at = {}, {}
+    local whole, at = {}, {}
     for _, it in ipairs(raid and raid.items or {}) do
         local b = it.b or ""
         if not at[b] then
             at[b] = { name = (b ~= "" and b) or "Elsewhere", items = {} }
-            table.insert(out, at[b])
+            table.insert(whole, at[b])
         end
         table.insert(at[b].items, it)
+    end
+    local out = {}
+    for _, b in ipairs(whole) do
+        local n = table.getn(b.items)
+        local parts = math.ceil(n / PART)
+        if parts <= 1 then
+            table.insert(out, b)
+        else
+            local size = math.ceil(n / parts)
+            for p = 1, parts do
+                local part = { name = b.name .. " (" .. p .. " of " .. parts .. ")", items = {} }
+                for i = (p - 1) * size + 1, math.min(p * size, n) do
+                    table.insert(part.items, b.items[i])
+                end
+                table.insert(out, part)
+            end
+        end
     end
     return out
 end
@@ -513,6 +537,15 @@ local function dropdown(f, name, width, init, x, y)
     UIDropDownMenu_SetWidth(width, d)
     UIDropDownMenu_Initialize(d, init)
     if UIDropDownMenu_JustifyText then UIDropDownMenu_JustifyText("LEFT", d) end
+    -- The client leaves its text 25 of the box's pixels short, so the narrow
+    -- boxes (the time, reserves each, SR+) showed only "...". Give it the
+    -- box's inside, from just past its left edge to the arrow.
+    local text, left = getglobal(name .. "Text"), getglobal(name .. "Left")
+    if text and left then
+        text:ClearAllPoints()
+        text:SetPoint("LEFT", left, "LEFT", 24, 2)
+        text:SetWidth(width - 16)
+    end
     return d
 end
 
