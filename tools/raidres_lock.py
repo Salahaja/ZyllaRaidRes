@@ -366,6 +366,29 @@ def open_event(ref):
         ws.close()
     return "ok"
 
+# Lock or unlock, then read the list back. raidres can answer 200 to a change
+# it didn't make, and the game would then show a lock that isn't there; the
+# list read back says what really happened. A read-back that fails takes the
+# 200 at its word. Answers the PATCH's status, "unchanged", or "error:..."
+_LOCK_JS = r"""
+(a) => (async () => {
+  let r;
+  try {
+    r = await fetch('/api/events/' + a.ref, {
+      method: 'PATCH', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reference: a.ref, locked: a.locked }) });
+  } catch (e) { return 'error:' + e.message; }
+  if (r.status !== 200) return r.status.toString();
+  try {
+    const g = await fetch('/api/events/' + a.ref, { credentials: 'include', cache: 'no-store' });
+    const e = await g.json();
+    if (g.ok && e.locked !== a.locked) return 'unchanged';
+  } catch (e) {}
+  return '200';
+})()
+"""
+
 def lock_unlock(ref, locked):
     validate_ref(ref)
     if not ensure_chrome("https://raidres.top/res/%s" % ref):
@@ -380,18 +403,8 @@ def lock_unlock(ref, locked):
     ws_url = tab["webSocketDebuggerUrl"]
     ws = WebSocket(ws_url)
     try:
-        js = (
-            "fetch('https://raidres.top/api/events/%s', {"
-            "  method: 'PATCH',"
-            "  credentials: 'include',"
-            "  headers: { 'Content-Type': 'application/json' },"
-            "  body: JSON.stringify({ reference: '%s', locked: %s })"
-            "}).then(r => { return r.status.toString() })"
-            ".catch(e => 'error:' + e.message)"
-        ) % (ref, ref, "true" if locked else "false")
-
         result = ws.call("Runtime.evaluate", {
-            "expression": js,
+            "expression": "(%s)(%s)" % (_LOCK_JS, json.dumps({"ref": ref, "locked": bool(locked)})),
             "awaitPromise": True,
             "returnByValue": True,
         })
@@ -408,6 +421,10 @@ def lock_unlock(ref, locked):
             if expiry:
                 return "ok %s" % expiry
             return "ok"
+        elif value == "unchanged":
+            return ("error: raidres said yes but the list is still %s. Only its owner "
+                    "or one of its admins can %s it" % ("unlocked" if locked else "locked",
+                                                         "lock" if locked else "unlock"))
         elif value.startswith("error:"):
             return "error: " + value[6:]
         else:

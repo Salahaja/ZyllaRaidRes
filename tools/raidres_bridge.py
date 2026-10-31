@@ -26,6 +26,7 @@ Usage:
     python raidres_bridge.py raids                 cache every raid's loot table
 """
 
+import datetime
 import io
 import json
 import os
@@ -158,11 +159,31 @@ def build(ref):
         "skipped": skipped,
         "raid": raid.get("name", "?"),
         "limit": event.get("reservationLimit"),
-        # null is a list nobody has locked or unlocked yet: open, as on the
-        # site. Only an event with no "locked" at all is unknown.
-        "locked": False if "locked" in event and event["locked"] is None
-                  else event.get("locked"),
+        "locked": event_locked(event),
     }
+
+
+def event_locked(event, now=None):
+    """Whether raidres has the list locked, by the site's own rule; None when
+    the event doesn't say.
+
+    A list someone locked or unlocked is what they set. One nobody has comes
+    as "locked": null and is open, unless it locks at its start time, less
+    its minutes before, and that has come."""
+    if "locked" not in event:
+        return None
+    locked = event["locked"]
+    if locked is not None:
+        return locked if isinstance(locked, bool) else None
+    if not event.get("lockAtStartTime"):
+        return False
+    try:
+        start = datetime.datetime.strptime(event["startTime"][:19], "%Y-%m-%dT%H:%M:%S")
+    except (KeyError, TypeError, ValueError):
+        return None
+    start = start.replace(tzinfo=datetime.timezone.utc).timestamp()
+    minutes = event.get("lockMinutesBeforeStartTime") or 0
+    return (time.time() if now is None else now) >= start - minutes * 60
 
 
 def lua_literal(value):

@@ -139,6 +139,34 @@ try:
 except ValueError:
     check("a bad carry-over list is refused", "refused", "refused")
 
+print("is the list locked, by the site's rule")
+import datetime
+import raidres_bridge as bridge
+START = datetime.datetime(2026, 11, 1, 20, tzinfo=datetime.timezone.utc).timestamp()
+
+def ev(**fields):
+    e = {"locked": None, "lockAtStartTime": False, "lockMinutesBeforeStartTime": 0,
+         "startTime": "2026-11-01T20:00:00.000Z"}
+    e.update(fields)
+    return e
+
+check("locked", bridge.event_locked(ev(locked=True)), True)
+check("unlocked", bridge.event_locked(ev(locked=False)), False)
+check("never set is open", bridge.event_locked(ev()), False)
+check("never set, locking at the start: open before it",
+      bridge.event_locked(ev(lockAtStartTime=True), now=START - 1), False)
+check("and locked from it", bridge.event_locked(ev(lockAtStartTime=True), now=START), True)
+check("its minutes before count", bridge.event_locked(
+    ev(lockAtStartTime=True, lockMinutesBeforeStartTime=30), now=START - 1800), True)
+check("but not a second sooner", bridge.event_locked(
+    ev(lockAtStartTime=True, lockMinutesBeforeStartTime=30), now=START - 1801), False)
+check("a lock someone set wins over the start time",
+      bridge.event_locked(ev(locked=False, lockAtStartTime=True), now=START + 99), False)
+check("an event with no lock at all is unknown", bridge.event_locked({"startTime": "x"}), None)
+check("so is one that isn't true or false", bridge.event_locked(ev(locked="yes")), None)
+check("or a start time that can't be read",
+      bridge.event_locked(ev(lockAtStartTime=True, startTime="soon")), None)
+
 # ------------------------------------------------------------------ in a real Chrome
 tmp = tempfile.mkdtemp(prefix="raidres-lock-test-")
 os.environ["LOCALAPPDATA"] = tmp       # its own profile, never the signed-in one
@@ -620,6 +648,26 @@ try:
                        script=w._ADMIN_JS, event=owned)
     check("a saved account that's the owner's is refused", (answer.get("message"), sent),
           ("Faraway owns the list", []))
+
+    print("locking, then reading it back")
+    lock = "(a) => (%s)(a).then(v => JSON.stringify(v))" % w._LOCK_JS
+    yes = {"status": 200, "body": {}}
+    answer, sent = run({"ref": "DEMO42", "locked": True}, script=lock, event=EVENT, reply=yes)
+    check("a lock raidres made answers 200", answer, "200")
+    check("after one PATCH of the lock alone", sent,
+          [{"url": "/api/events/DEMO42", "method": "PATCH",
+            "body": {"reference": "DEMO42", "locked": True}}])
+    answer, sent = run({"ref": "DEMO42", "locked": False}, script=lock, event=OPEN, reply=yes)
+    check("an unlock that took answers 200", answer, "200")
+    answer, sent = run({"ref": "DEMO42", "locked": False}, script=lock, event=EVENT, reply=yes)
+    check("an unlock raidres said yes to but didn't make is caught", answer, "unchanged")
+    never = copy.deepcopy(EVENT)
+    never["locked"] = None
+    answer, sent = run({"ref": "DEMO42", "locked": True}, script=lock, event=never, reply=yes)
+    check("so is a lock that left it never set", answer, "unchanged")
+    answer, sent = run({"ref": "DEMO42", "locked": True}, script=lock, event=EVENT,
+                       reply={"status": 403, "body": None})
+    check("a refusal answers its status", answer, "403")
 finally:
     ws.close()
     w.kill_chrome()

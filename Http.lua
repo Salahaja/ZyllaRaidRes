@@ -584,18 +584,41 @@ local function decoded(status, body, what)
     return v
 end
 
+--[[ A moment raidres sends ("2026-10-31T04:00:00.000Z") in seconds since
+     1970, UTC, which is what time() counts. Day arithmetic after Howard
+     Hinnant's days_from_civil, since 1.12 has no UTC date parser. ]]
+local function epoch(iso)
+    if type(iso) ~= "string" then return nil end
+    local _, _, y, m, d, hh, mm, ss = string.find(iso, "^(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)")
+    if not y then return nil end
+    y, m, d = tonumber(y), tonumber(m), tonumber(d)
+    if m <= 2 then y = y - 1 end
+    local era = math.floor(y / 400)
+    local yoe = y - era * 400
+    local doy = math.floor((153 * math.mod(m + 9, 12) + 2) / 5) + d - 1
+    local doe = yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy
+    return (era * 146097 + doe - 719468) * 86400 +
+        tonumber(hh) * 3600 + tonumber(mm) * 60 + tonumber(ss)
+end
+RB.Epoch = epoch
+
 --[[ Whether raidres has a list locked: true, false, or nil when the event
-     doesn't say. A list nobody has locked or unlocked yet comes as
-     "locked": null, which raidres's own site takes as open. The decoder drops
-     a null along with its key, so the reply's text is asked whether it was
-     there; an event with no "locked" at all stays unknown. ]]
+     doesn't say. The site's own rule: a list someone locked or unlocked is
+     what they set. One nobody has comes as "locked": null, and is open --
+     unless it locks at its start time, less its minutes before, and that has
+     come. The decoder drops a null along with its key, so the reply's text
+     is asked whether it was there; an event with no "locked" at all stays
+     unknown. ]]
 local function eventLocked(event, body)
     if type(event.locked) == "boolean" then return event.locked end
-    if event.locked == nil and type(body) == "string"
-        and string.find(body, '"locked"%s*:%s*null') then
-        return false
+    if event.locked ~= nil or type(body) ~= "string"
+        or not string.find(body, '"locked"%s*:%s*null') then
+        return nil
     end
-    return nil
+    if not event.lockAtStartTime then return false end
+    local start, now = epoch(event.startTime), time and time()
+    if not start or not now then return nil end
+    return now >= start - (tonumber(event.lockMinutesBeforeStartTime) or 0) * 60
 end
 
 --[[ Is SR+ on for a list? Read off the event replies the window already

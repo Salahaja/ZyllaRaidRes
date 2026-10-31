@@ -558,6 +558,52 @@ do
     check("spaced out, too", RB.LockState("DEMO42"), false)
 end
 
+print("a list that locks at its start time")
+do
+    local RB = world(true)
+    serve()
+    check("the count starts in 1970", RB.Epoch("1970-01-01T00:00:00.000Z"), 0)
+    check("a leap day", RB.Epoch("2000-02-29T12:34:56Z"), 951827696)
+    check("raidres's own form", RB.Epoch("2026-10-31T04:00:00.000Z"), 1793419200)
+    check("not a date", RB.Epoch("soon"), nil)
+
+    -- the fixture starts 2026-10-17T02:03:00Z
+    local start = RB.Epoch("2026-10-17T02:03:00.000Z")
+    local function page(locked, atStart, before)
+        return eventPage(function(b)
+            b = string.gsub(b, '"locked":true', '"locked":' .. locked)
+            b = string.gsub(b, '"lockAtStartTime":false', '"lockAtStartTime":' .. atStart)
+            return (string.gsub(b, '"lockMinutesBeforeStartTime":0', '"lockMinutesBeforeStartTime":' .. before))
+        end)
+    end
+    local function lockAt(clock, locked, atStart, before)
+        time = clock and function() return clock end or nil
+        SITE["/api/events/DEMO42"] = page(locked, atStart, before)
+        RaidResBridge_Locked, RB.lockInfo = nil, nil
+        SlashCmdList.RAIDRESBRIDGE("DEMO42")
+        run(3)
+        return RB.LockState("DEMO42")
+    end
+    check("never set, locking at the start: open before it", lockAt(start - 1, "null", "true", 0), false)
+    check("and locked from it", lockAt(start, "null", "true", 0), true)
+    check("its minutes before count", lockAt(start - 1800, "null", "true", 30), true)
+    check("but not a second sooner", lockAt(start - 1801, "null", "true", 30), false)
+    check("a lock someone set wins over the start time", lockAt(start + 99, "false", "true", 0), false)
+    check("and the other way", lockAt(start - 99, "true", "true", 0), true)
+    check("with no clock it can't say", lockAt(nil, "null", "true", 0), nil)
+
+    -- the half-minute look sees the start time come
+    lockAt(start - 5, "null", "true", 0)
+    check("open just before", RB.LockState("DEMO42"), false)
+    time = function() return start + 25 end
+    SAID = {}
+    RB.HttpPollLock("DEMO42")
+    run(3)
+    check("locked once it comes", RB.LockState("DEMO42"), true)
+    check("and says so", heard("locked on raidres"), true)
+    time = nil
+end
+
 print("looking again, quietly")
 do
     local RB = world(true)
