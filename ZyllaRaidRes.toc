@@ -2,7 +2,7 @@
 ## Title: Zylla RaidRes
 ## Notes: Fetch a raidres soft-reserve list into RollFor from in game. Fetches by itself with RaidResHttp.dll loaded; otherwise needs the watcher script running outside the game.
 ## Author: Salahaja
-## Version: 1.6.2
+## Version: 1.6.3
 ## X-Website: https://github.com/Salahaja/ZyllaRaidRes
 ## OptionalDeps: RollFor, pfUI
 ## SavedVariables: RaidResBridge_Manual, RaidResBridge_Limit, RaidResBridge_Names, RaidResBridge_LockControl, RaidResBridge_Options, RaidResBridge_Recent, RaidResBridge_Spec, RaidResBridge_NewEvent, RaidResBridge_ForOthers, RaidResBridge_Users
