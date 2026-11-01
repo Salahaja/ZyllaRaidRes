@@ -742,6 +742,29 @@ function RB.WebCount(s, k)
     return (s and s.webCount and s.webCount[k]) or 0
 end
 
+--- Does the list let a player reserve the same item twice? raidres says (Http.lua).
+function RB.Dupes(s)
+    return s and s.ref and s.ref ~= "manual" and RB.eventDupes
+        and RB.eventDupes[string.lower(s.ref)] and true or false
+end
+
+--- How many copies of `id` `name` holds, raidres's and typed together.
+function RB.Copies(s, name, id)
+    local n = 0
+    for _, it in ipairs(s.items[key(name)] or {}) do
+        if it.id == id then n = n + 1 end
+    end
+    return n
+end
+
+--[[ Does a click on an item `name` already holds reserve it again, for a
+     second roll, rather than take it back? Only where the list allows the
+     same item twice, while they hold one copy and `held` leaves room. The
+     X under their reserves takes a copy back. ]]
+function RB.ClickAddsCopy(s, name, id, held)
+    return RB.Dupes(s) and RB.Copies(s, name, id) == 1 and held < RB.Limit()
+end
+
 --- Does a click on loot for `name` go to raidres? Only for you, on a raidres list.
 function RB.ReservesOnRaidres(s, name)
     return s and s.ref and s.ref ~= "manual" and RB.MySignup(s, name) ~= nil
@@ -1330,15 +1353,31 @@ function RB.ClickItem(data)
         return
     end
 
-    if RB.RemoveManual(who, id) then
+    local s = RB.Snapshot()
+    local k = key(who)
+    -- typed here: take it back, or type it again where the list allows twice
+    if s.typed[k] and s.typed[k][id] then
+        if RB.ClickAddsCopy(s, who, id, table.getn(s.items[k] or {})) then
+            local ok, err = RB.AddManual(who, id, data.item.q or 4, true)
+            if not ok then
+                RB.Notice(err or "could not add that")
+                return
+            end
+        else
+            RB.RemoveManual(who, id)
+        end
         RB.Commit()
         return
     end
 
-    local s = RB.Snapshot()
-    local k = key(who)
+    local has = s.web[k] and s.web[k][id]
+    local again = has and RB.ClickAddsCopy(s, who, id, RB.WebCount(s, k))
     if RB.ReservesOnRaidres(s, who) then
-        RB.ReserveOnRaidres(id, (s.web[k] and s.web[k][id]) and true or false)
+        RB.ReserveOnRaidres(id, (has and not again) and true or false)
+        return
+    end
+    if again and RB.ReservesForOther(s, who) then
+        RB.ReserveForOther(id, false)
         return
     end
     if RB.ClickRemovesTheirs(s, who, id) then
@@ -1346,7 +1385,7 @@ function RB.ClickItem(data)
         return
     end
     if RB.ReservesForOther(s, who) then
-        RB.ReserveForOther(id, (s.web[k] and s.web[k][id]) and true or false)
+        RB.ReserveForOther(id, has and true or false)
         return
     end
     if RB.ShouldAskWhere(s, who) then
@@ -1476,7 +1515,16 @@ function RB.ItemTooltip(owner, id)
             local held = table.getn(s.items[k] or {})
             if onRaidres or forOther then held = RB.WebCount(s, k) end
             local typedHere = s.typed[k] and s.typed[k][id]
-            if mine and s.web[k] and s.web[k][id] and not typedHere then
+            local again = mine and RB.ClickAddsCopy(s, who, id,
+                typedHere and table.getn(s.items[k] or {}) or held)
+            if again and typedHere then
+                GameTooltip:AddLine("Click: reserve it again for " .. who .. ", for 2 rolls", 0.13, 1, 0.13)
+                addGrey("The X under their reserves takes one back.")
+            elseif again and (onRaidres or forOther) then
+                GameTooltip:AddLine("Click: reserve it again on raidres" ..
+                    (forOther and (" for " .. who) or "") .. ", for 2 rolls", 0.13, 1, 0.13)
+                addGrey("The X under " .. (onRaidres and "your" or "their") .. " reserves takes one back.")
+            elseif mine and s.web[k] and s.web[k][id] and not typedHere then
                 if onRaidres then
                     GameTooltip:AddLine("Click: take it back on raidres", 0.13, 1, 0.13)
                 elseif RB.ClickRemovesTheirs(s, who, id) then
@@ -3358,15 +3406,22 @@ local function holdersText(holders, hard)
     local n = table.getn(holders)
     if n == 0 then return "" end
     local sk = RB.player and key(RB.player)
-    local ordered = {}
+    -- one name each: whoever holds it twice shows once, x2
+    local ordered, copies = {}, {}
     for _, name in ipairs(holders) do
-        if sk and key(name) == sk then table.insert(ordered, 1, name)
-        else table.insert(ordered, name) end
+        if not copies[key(name)] then
+            if sk and key(name) == sk then table.insert(ordered, 1, name)
+            else table.insert(ordered, name) end
+        end
+        copies[key(name)] = (copies[key(name)] or 0) + 1
     end
+    n = table.getn(ordered)
     local parts = {}
     for i = 1, math.min(n, 2) do
         local name = ordered[i]
-        table.insert(parts, hex((sk and key(name) == sk) and GREEN or GOLD, name))
+        local many = copies[key(name)]
+        table.insert(parts, hex((sk and key(name) == sk) and GREEN or GOLD, name) ..
+            (many > 1 and hex(WHITE, " x" .. many) or ""))
     end
     return table.concat(parts, hex(GREY, ", ")) ..
         (n > 2 and hex(GREY, " +" .. (n - 2)) or "")

@@ -629,6 +629,9 @@ function RB.NoteEventSr(ref, event)
     if type(event) ~= "table" or not ref then return end
     local on = event.allowSrPlus == true
     RB.eventSr[ref] = on
+    -- and whether a player may reserve the same item twice, for two rolls
+    RB.eventDupes = RB.eventDupes or {}
+    RB.eventDupes[string.lower(ref)] = event.allowDuplicateReservation == true
     -- and on the Recent list, for the next event's "SR+ from" to know
     for _, r in ipairs(RaidResBridge_Recent or {}) do
         if string.lower(r.ref or "") == string.lower(ref) then r.sr = on end

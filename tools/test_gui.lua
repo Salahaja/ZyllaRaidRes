@@ -2732,6 +2732,118 @@ f.playerMenu.ddOpen = nil
 fire(zed, "OnClick", "RightButton")
 check("without the helper, no menu", f.playerMenu.ddOpen, nil)
 
+-- ================================================================== the same item twice
+print("the same item twice, where the list allows it")
+-- a function: the main chunk is at its 200 locals
+;(function()
+    RB = world()
+    RaidResLockReady = function() return 1 end
+    SlashCmdList.RAIDRESBRIDGE("")
+    f = RB.gui
+    RB.SetLock("DEMO42", false)
+    NOW = NOW + 5
+    local CMD, RESULT = "RaidResBridge_lock_cmd.txt", "RaidResBridge_lock_result.txt"
+    local id = firstItemRow(f).data.item.g
+    loadstring(slurp(DIR .. "RaidResBridge_data.lua"))()
+    local list = RaidResBridge_Data
+    local tester = { name = "Tester", role = "", items = { { id = id, quality = 4 } } }
+    table.insert(list.softreserves, tester)
+    RB.fetched = { unsaved = true, ref = "DEMO42", data = list }
+    RB.player = "Tester"
+    RB.Refresh()
+    local function answer(text)
+        FILES[RESULT] = text
+        run(1)
+        RB.waiting = nil
+    end
+
+    RB.NoteEventSr("DEMO42", { allowDuplicateReservation = false })
+    RB.Refresh()
+    check("not allowed: the list says so", RB.Dupes(f.snap), false)
+    FILES[CMD] = nil
+    click(itemRow(f, id))
+    check("a click on one you hold takes it back", FILES[CMD], "unreserve DEMO42 " .. id .. " Tester")
+    answer("ok removed")
+
+    RB.NoteEventSr("DEMO42", { allowDuplicateReservation = true })
+    RB.Refresh()
+    check("allowed: the list says so", RB.Dupes(f.snap), true)
+    enter(itemRow(f, id))
+    check("the tooltip offers a second", tipHas("Click: reserve it again on raidres, for 2 rolls"), true)
+    check("and says how to take one back", tipHas("The X under your reserves takes one back."), true)
+    FILES[CMD] = nil
+    click(itemRow(f, id))
+    check("a click reserves it again", string.find(FILES[CMD] or "", "^reserve DEMO42 " .. id .. " Tester ") ~= nil,
+        true)
+    answer("ok reserved WarriorFury")
+
+    table.insert(tester.items, { id = id, quality = 4 })
+    RaidResBridge_Limit = 3
+    RB.Refresh()
+    check("both show beside the loot, once, x2",
+        string.find(plain(itemRow(f, id).who:GetText()), "Tester x2", 1, true) ~= nil, true)
+    FILES[CMD] = nil
+    click(itemRow(f, id))
+    check("never a third: with two, a click takes one back", FILES[CMD], "unreserve DEMO42 " .. id .. " Tester")
+    answer("ok removed")
+    table.remove(tester.items)
+
+    -- full: one of it, one of something else, at a limit of 2
+    local other
+    for _, r in ipairs(visible(f.lRows)) do
+        local g = r.data and r.data.item and r.data.item.g
+        if g and g ~= id then other = other or g end
+    end
+    table.insert(tester.items, { id = other, quality = 4 })
+    RaidResBridge_Limit = 2
+    RB.Refresh()
+    FILES[CMD] = nil
+    click(itemRow(f, id))
+    check("full, a click takes it back", FILES[CMD], "unreserve DEMO42 " .. id .. " Tester")
+    answer("ok removed")
+    table.remove(tester.items)
+
+    -- for someone else on raidres
+    table.insert(list.softreserves, { name = "Zed", role = "", items = { { id = id, quality = 4 } } })
+    RB.OthersFor("DEMO42").zed = { name = "Zed", class = "ROGUE", on = true }
+    RaidResBridge_Spec = { zed = "RogueDaggers" }
+    RB.player = "Zed"
+    RB.Refresh()
+    enter(itemRow(f, id))
+    check("for them, the tooltip offers a second", tipHas("Click: reserve it again on raidres for Zed, for 2 rolls"),
+        true)
+    FILES[CMD] = nil
+    click(itemRow(f, id))
+    check("and the click sends it", FILES[CMD], "reserve-for DEMO42 " .. id .. " Zed Rogue RogueDaggers")
+    answer("ok reserved RogueDaggers")
+    RB.OthersFor("DEMO42").zed = nil
+
+    -- typed here
+    RB.OthersFor("DEMO42").newbie = { name = "Newbie", here = true }
+    RB.player = "Newbie"
+    RB.Refresh()
+    click(itemRow(f, id))
+    check("typed: the first click types it", table.getn(RaidResBridge_Manual.newbie.items), 1)
+    enter(itemRow(f, id))
+    check("the tooltip offers a second", tipHas("Click: reserve it again for Newbie, for 2 rolls"), true)
+    click(itemRow(f, id))
+    check("the second click types it again", table.getn(RaidResBridge_Manual.newbie.items), 2)
+    local copies = 0
+    for _, p in ipairs(RB.Merged().softreserves) do
+        if p.name == "Newbie" then copies = table.getn(p.items) end
+    end
+    check("and RollFor gets both, for 2 rolls", copies, 2)
+    check("never a third", (RB.AddManual("Newbie", id, 4, true)), false)
+    click(itemRow(f, id))
+    check("with two, a click takes one back", table.getn(RaidResBridge_Manual.newbie.items), 1)
+    check("nor a second without the list's word", (RB.AddManual("Newbie", id, 4)), false)
+    RB.NoteEventSr("DEMO42", { allowDuplicateReservation = false })
+    RB.Refresh()
+    click(itemRow(f, id))
+    check("not allowed: a click takes a typed one back", RaidResBridge_Manual.newbie, nil)
+    RaidResBridge_Limit, RaidResBridge_Spec = nil, nil
+end)()
+
 -- ================================================================== SR+ in the window
 print("SR+ beside each reserve")
 RB = world()

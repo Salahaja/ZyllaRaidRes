@@ -40,7 +40,9 @@ function RB.ManualList()
     return out
 end
 
-function RB.AddManual(name, itemId, quality)
+--[[ `twice`: the list allows the same item twice, so a second copy -- a
+     second roll in RollFor -- is fine. Never a third. ]]
+function RB.AddManual(name, itemId, quality, twice)
     name = string.gsub(name or "", "^%s*(.-)%s*$", "%1")
     itemId = tonumber(itemId)
     if name == "" or not itemId then return false, "need a name and an item" end
@@ -51,10 +53,12 @@ function RB.AddManual(name, itemId, quality)
         row = { name = name, items = {} }
         RaidResBridge_Manual[k] = row
     end
+    local copies = 0
     for i = 1, table.getn(row.items) do
-        if row.items[i].id == itemId then
-            return false, name .. " already has that reserved"
-        end
+        if row.items[i].id == itemId then copies = copies + 1 end
+    end
+    if copies >= (twice and 2 or 1) then
+        return false, name .. " already has that reserved" .. (copies > 1 and " twice" or "")
     end
     table.insert(row.items, { id = itemId, quality = quality or 4, sr_plus = 0 })
     return true
@@ -123,12 +127,12 @@ function RB.Merged()
             byName[key(row.name)] = existing
             table.insert(data.softreserves, existing)
         end
+        -- each typed copy beyond the copies the website already has
+        local have, used = {}, {}
+        for _, h in ipairs(existing.items) do have[h.id] = (have[h.id] or 0) + 1 end
         for _, it in ipairs(row.items) do
-            local already = false
-            for _, have in ipairs(existing.items) do
-                if have.id == it.id then already = true end
-            end
-            if not already then
+            used[it.id] = (used[it.id] or 0) + 1
+            if used[it.id] > (have[it.id] or 0) then
                 table.insert(existing.items,
                     { id = it.id, quality = it.quality, sr_plus = it.sr_plus or 0 })
             end
